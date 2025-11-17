@@ -1,0 +1,725 @@
+{
+  "info": {
+    "name": "ERP v2 - Full API Collection",
+    "description": "Полная коллекция API для мультитенантной POS системы",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refresh_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tenant_key",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Автоматически добавляем X-Tenant-Key ко всем запросам",
+          "const tenantKey = pm.collectionVariables.get('tenant_key');",
+          "if (tenantKey) {",
+          "    pm.request.headers.add({",
+          "        key: 'X-Tenant-Key',",
+          "        value: tenantKey",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"test@example.com\",\n  \"password\": \"TestPass123!\",\n  \"password2\": \"TestPass123!\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"User\",\n  \"store_name\": \"Test Store\",\n  \"phone\": \"+998901234567\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/users/auth/register/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "auth", "register", ""]
+            }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.access) {",
+                  "    pm.collectionVariables.set('access_token', jsonData.data.access);",
+                  "    pm.collectionVariables.set('refresh_token', jsonData.data.refresh);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"testuser\",\n  \"password\": \"TestPass123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/users/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "auth", "login", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users/profile/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "profile", ""]
+            }
+          }
+        },
+        {
+          "name": "Get My Stores",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.stores && jsonData.data.stores.length > 0) {",
+                  "    pm.collectionVariables.set('tenant_key', jsonData.data.stores[0].tenant_key);",
+                  "    console.log('Tenant key saved:', jsonData.data.stores[0].tenant_key);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/users/auth/my-stores/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "users", "auth", "my-stores", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/products/products/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "products", "products", ""]
+            }
+          }
+        },
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"iPhone 14 Pro\",\n  \"sku\": \"IPHONE-14-PRO\",\n  \"barcode\": \"1234567890123\",\n  \"description\": \"Latest iPhone model\",\n  \"cost_price\": 50000,\n  \"sale_price\": 75000,\n  \"wholesale_price\": 65000,\n  \"tax_rate\": 12,\n  \"unit\": \"pcs\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/products/products/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "products", "products", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Product by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/products/products/1/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "products", "products", "1", ""]
+            }
+          }
+        },
+        {
+          "name": "Low Stock Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/products/products/low-stock/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "products", "products", "low-stock", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sales (Cashier)",
+      "item": [
+        {
+          "name": "Open Session",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"opening_balance\": 100000\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sessions/open/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sessions", "open", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Current Session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sales/sessions/current/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sessions", "current", ""]
+            }
+          }
+        },
+        {
+          "name": "Scan Item (Add to Sale)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"session\": 1,\n  \"product\": 18,\n  \"quantity\": 2,\n  \"batch\": null\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/scan-item/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", "scan-item", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Current Sale",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/current/?session=1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", "current", ""],
+              "query": [{"key": "session", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Add Item to Sale",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"product\": 19,\n  \"quantity\": 1,\n  \"batch\": null\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/:sale_id/add-item/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", ":sale_id", "add-item", ""],
+              "variable": [{"key": "sale_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Remove Item from Sale",
+          "request": {
+            "method": "DELETE",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"item_id\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/:sale_id/remove-item/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", ":sale_id", "remove-item", ""],
+              "variable": [{"key": "sale_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Checkout (Complete Sale)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payments\": [\n    {\n      \"payment_method\": \"cash\",\n      \"amount\": 150000,\n      \"received_amount\": 200000\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/:sale_id/checkout/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", ":sale_id", "checkout", ""],
+              "variable": [{"key": "sale_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Close Session",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actual_cash\": 250000\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/sales/sessions/:session_id/close/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sessions", ":session_id", "close", ""],
+              "variable": [{"key": "session_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "List Sales",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", ""]
+            }
+          }
+        },
+        {
+          "name": "Today Sales",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/sales/sales/today/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sales", "sales", "today", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Analytics",
+      "item": [
+        {
+          "name": "Daily Sales Reports",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/daily-sales/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "daily-sales", ""]
+            }
+          }
+        },
+        {
+          "name": "Today Report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/daily-sales/today/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "daily-sales", "today", ""]
+            }
+          }
+        },
+        {
+          "name": "Period Report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/daily-sales/period/?start_date=2025-01-01&end_date=2025-01-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "daily-sales", "period", ""],
+              "query": [
+                {"key": "start_date", "value": "2025-01-01"},
+                {"key": "end_date", "value": "2025-01-31"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sales Trends",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/daily-sales/trends/?days=30",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "daily-sales", "trends", ""],
+              "query": [{"key": "days", "value": "30"}]
+            }
+          }
+        },
+        {
+          "name": "Product Performance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/product-performance/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "product-performance", ""]
+            }
+          }
+        },
+        {
+          "name": "Top Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/product-performance/top-products/?limit=10&order_by=revenue",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "product-performance", "top-products", ""],
+              "query": [
+                {"key": "limit", "value": "10"},
+                {"key": "order_by", "value": "revenue"}
+              ]
+            }
+          }
+        },
+        {
+          "name": "Slow Movers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/product-performance/slow-movers/?days=30",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "product-performance", "slow-movers", ""],
+              "query": [{"key": "days", "value": "30"}]
+            }
+          }
+        },
+        {
+          "name": "Customer Analytics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/customer-analytics/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "customer-analytics", ""]
+            }
+          }
+        },
+        {
+          "name": "Customer Segments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/customer-analytics/segments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "customer-analytics", "segments", ""]
+            }
+          }
+        },
+        {
+          "name": "At Risk Customers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/customer-analytics/at-risk/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "customer-analytics", "at-risk", ""]
+            }
+          }
+        },
+        {
+          "name": "Inventory Snapshots",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/inventory-snapshots/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "inventory-snapshots", ""]
+            }
+          }
+        },
+        {
+          "name": "Latest Inventory",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/inventory-snapshots/latest/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "inventory-snapshots", "latest", ""]
+            }
+          }
+        },
+        {
+          "name": "Low Stock Alerts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/inventory-snapshots/low-stock-alerts/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "inventory-snapshots", "low-stock-alerts", ""]
+            }
+          }
+        },
+        {
+          "name": "Out of Stock",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/analytics/inventory-snapshots/out-of-stock/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "analytics", "inventory-snapshots", "out-of-stock", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "item": [
+        {
+          "name": "List Tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", ""]
+            }
+          }
+        },
+        {
+          "name": "Create Task",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Проверить остатки товара\",\n  \"description\": \"Провести инвентаризацию склада\",\n  \"priority\": \"high\",\n  \"category\": \"inventory\",\n  \"assigned_to\": 1,\n  \"due_date\": \"2025-01-20T18:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Task by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/:task_id/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", ":task_id", ""],
+              "variable": [{"key": "task_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "My Tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/my-tasks/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", "my-tasks", ""]
+            }
+          }
+        },
+        {
+          "name": "Today Tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/today/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", "today", ""]
+            }
+          }
+        },
+        {
+          "name": "Overdue Tasks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/overdue/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", "overdue", ""]
+            }
+          }
+        },
+        {
+          "name": "Task Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/stats/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", "stats", ""]
+            }
+          }
+        },
+        {
+          "name": "Start Task",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/:task_id/start/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", ":task_id", "start", ""],
+              "variable": [{"key": "task_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Complete Task",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/tasks/:task_id/complete/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "tasks", ":task_id", "complete", ""],
+              "variable": [{"key": "task_id", "value": "1"}]
+            }
+          }
+        },
+        {
+          "name": "Add Comment",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task\": 1,\n  \"comment\": \"Работаю над задачей\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tasks/comments/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "comments", ""]
+            }
+          }
+        },
+        {
+          "name": "List Task Templates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/templates/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "templates", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Customers",
+      "item": [
+        {
+          "name": "List Customers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/customers/customers/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "customers", "customers", ""]
+            }
+          }
+        },
+        {
+          "name": "Create Customer",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test Customer\",\n  \"phone\": \"+998901234567\",\n  \"email\": \"customer@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/customers/customers/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "customers", "customers", ""]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

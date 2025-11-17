@@ -1,0 +1,43 @@
+# Core Django
+Django==5.1.4
+djangorestframework==3.16.0
+djangorestframework-simplejwt==5.5.0
+
+# Database (мы сделаем свою систему мультитенантности вместо django-tenants)
+psycopg2-binary==2.9.10
+
+# API Documentation
+drf-yasg==1.21.10
+
+# Security
+django-cors-headers==4.6.0
+python-dotenv==1.0.1
+
+# Validation
+django-filter==24.3
+
+# Task Queue
+celery==5.4.0
+redis==5.2.1
+django-celery-beat==2.7.0
+
+# Monitoring & Logging
+sentry-sdk==2.20.0
+
+# Image processing
+Pillow==11.2.1
+
+# Barcode & QR
+python-barcode==0.15.1
+qrcode==8.2
+
+# Testing
+pytest==8.3.4
+pytest-django==4.9.0
+pytest-cov==6.0.0
+factory-boy==3.3.1
+
+# Code Quality
+black==24.10.0
+flake8==7.1.1
+isort==5.13.2
