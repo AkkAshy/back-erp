@@ -100,11 +100,20 @@ class TenantByKeyMiddleware(MiddlewareMixin):
             logger.debug(f"Switched to schema: {tenant.schema_name} (tenant_key: {tenant_key})")
 
         except Exception as e:
-            logger.error(f"Error processing tenant: {e}", exc_info=True)
+            logger.error(
+                f"Error processing tenant with key '{tenant_key}': {type(e).__name__}: {e}",
+                exc_info=True,
+                extra={
+                    'tenant_key': tenant_key,
+                    'path': request.path,
+                    'user': request.user.username if hasattr(request, 'user') and request.user.is_authenticated else 'anonymous'
+                }
+            )
             return JsonResponse({
                 'status': 'error',
                 'code': 'tenant_error',
-                'message': 'Ошибка при обработке магазина'
+                'message': 'Ошибка при обработке магазина',
+                'debug': str(e) if settings.DEBUG else None
             }, status=500)
 
         return None
@@ -148,10 +157,11 @@ class TenantByKeyMiddleware(MiddlewareMixin):
                 is_active=True
             )
         except Store.DoesNotExist:
+            logger.warning(f"Store not found for tenant_key: {tenant_key}")
             return None
         except Exception as e:
-            logger.error(f"Error fetching tenant: {e}")
-            return None
+            logger.error(f"Error fetching tenant for key '{tenant_key}': {type(e).__name__}: {e}", exc_info=True)
+            raise  # Re-raise to be caught in process_request with better logging
 
     def _set_schema(self, schema_name):
         """

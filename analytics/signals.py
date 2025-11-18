@@ -16,29 +16,41 @@ from decimal import Decimal
 def update_analytics_on_sale(sender, instance, created, **kwargs):
     """
     Обновляет аналитику при создании или изменении продажи.
-    
+
     - DailySalesReport: обновляется при завершении продажи
     - ProductPerformance: обновляется для каждого товара в продаже
     - CustomerAnalytics: обновляется если продажа с клиентом
     """
+    import logging
     from analytics.models import DailySalesReport, ProductPerformance
-    
+
+    logger = logging.getLogger(__name__)
+
     # Обновляем только для завершённых продаж
     if instance.status != 'completed' or not instance.completed_at:
         return
-    
+
     sale_date = instance.completed_at.date()
-    
-    # Обновляем дневной отчёт
-    _update_daily_sales_report(sale_date)
-    
+
+    # Обновляем дневной отчёт (с обработкой ошибок)
+    try:
+        _update_daily_sales_report(sale_date)
+    except Exception as e:
+        logger.error(f"Error updating daily sales report: {e}", exc_info=True)
+
     # Обновляем производительность товаров
-    for item in instance.items.all():
-        _update_product_performance(item.product, sale_date)
-    
+    try:
+        for item in instance.items.all():
+            _update_product_performance(item.product, sale_date)
+    except Exception as e:
+        logger.error(f"Error updating product performance: {e}", exc_info=True)
+
     # Обновляем аналитику клиента если есть
     if instance.customer:
-        _update_customer_analytics(instance.customer)
+        try:
+            _update_customer_analytics(instance.customer)
+        except Exception as e:
+            logger.error(f"Error updating customer analytics: {e}", exc_info=True)
 
 
 @receiver(post_delete, sender='sales.Sale')
@@ -60,7 +72,7 @@ def _update_daily_sales_report(date):
     Агрегирует данные из всех завершённых продаж за день.
     """
     from analytics.models import DailySalesReport
-    from sales.models import Sale, Payment, CashSession
+    from sales.models import Sale, Payment, CashierSession
     from customers.models import Customer
     
     # Получаем все завершённые продажи за день
@@ -89,8 +101,7 @@ def _update_daily_sales_report(date):
     
     # Платежи по типам
     payments = Payment.objects.filter(
-        sale__in=sales,
-        status='completed'
+        sale__in=sales
     )
     
     payment_stats = {
@@ -109,7 +120,7 @@ def _update_daily_sales_report(date):
     ).distinct().count()
     
     # Смены
-    sessions = CashSession.objects.filter(opened_at__date=date)
+    sessions = CashierSession.objects.filter(opened_at__date=date)
     sessions_opened = sessions.count()
     sessions_closed = sessions.filter(status='closed').count()
     
@@ -159,29 +170,43 @@ def _update_product_performance(product, date):
     # Агрегируем данные
     stats = items.aggregate(
         quantity_sold=Sum('quantity'),
-        total_revenue=Sum('total_amount'),
+        total_revenue=Sum('line_total'),
         sales_count=Count('sale', distinct=True),
-        avg_price=Avg('price'),
-        avg_discount=Avg('discount_percent'),
-        total_cost=Sum(F('quantity') * F('cost_price')),
+        avg_price=Avg('unit_price'),
     )
     
-    # Считаем прибыль
-    total_cost = stats['total_cost'] or Decimal('0.00')
+    # Считаем себестоимость и прибыль
     total_revenue = stats['total_revenue'] or Decimal('0.00')
+    quantity_sold = stats['quantity_sold'] or Decimal('0.000')
+
+    # Получаем себестоимость товара
+    cost_price = Decimal('0.00')
+    if hasattr(product, 'pricing') and product.pricing:
+        cost_price = product.pricing.cost_price or Decimal('0.00')
+
+    total_cost = quantity_sold * cost_price
     total_profit = total_revenue - total_cost
     profit_margin = (total_profit / total_revenue * 100) if total_revenue > 0 else Decimal('0.00')
-    
+
+    # Средняя скидка - вычисляем из данных
+    avg_discount = Decimal('0.00')
+    if stats['sales_count'] and stats['avg_price']:
+        # Средняя скидка = (avg_price - (total_revenue / quantity_sold)) / avg_price * 100
+        avg_sale_price = total_revenue / quantity_sold if quantity_sold > 0 else Decimal('0.00')
+        if stats['avg_price'] > 0:
+            avg_discount = ((stats['avg_price'] - avg_sale_price) / stats['avg_price'] * 100)
+            avg_discount = max(Decimal('0.00'), avg_discount)  # Не может быть отрицательной
+
     # Создаём или обновляем запись
     ProductPerformance.objects.update_or_create(
         product=product,
         date=date,
         defaults={
-            'quantity_sold': stats['quantity_sold'] or Decimal('0.000'),
+            'quantity_sold': quantity_sold,
             'total_revenue': total_revenue,
             'sales_count': stats['sales_count'] or 0,
             'avg_price': stats['avg_price'] or Decimal('0.00'),
-            'avg_discount': stats['avg_discount'] or Decimal('0.00'),
+            'avg_discount': avg_discount,
             'total_cost': total_cost,
             'total_profit': total_profit,
             'profit_margin': profit_margin,
