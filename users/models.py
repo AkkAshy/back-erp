@@ -216,6 +216,7 @@ class Employee(models.Model):
         MANAGER = 'manager', _('Менеджер')
         CASHIER = 'cashier', _('Кассир')
         STOCKKEEPER = 'stockkeeper', _('Складчик')
+        STAFF = 'staff', _('Общий аккаунт сотрудников')
 
     # Пол сотрудника
     class Sex(models.TextChoices):
@@ -406,6 +407,10 @@ class Employee(models.Model):
                 'view_products', 'create_products', 'update_products',
                 'manage_inventory', 'view_analytics'
             ],
+            self.Role.STAFF: [
+                'view_products', 'create_sales', 'view_customers',
+                'create_customers', 'update_products', 'manage_inventory'
+            ],
         }
         return permissions_map.get(self.role, [])
 
@@ -427,6 +432,10 @@ def update_user_groups(sender, instance, created, **kwargs):
     Это нужно для работы с Django admin и permissions.
     """
     from django.contrib.auth.models import Group
+
+    # Если у Employee нет user (кассир без аккаунта), пропускаем
+    if not instance.user:
+        return
 
     try:
         # Получаем или создаем группу по названию роли
@@ -450,10 +459,11 @@ def update_user_groups(sender, instance, created, **kwargs):
 def create_owner_employee(sender, instance, created, **kwargs):
     """
     Автоматически создаём запись Employee с ролью OWNER
-    при создании нового магазина.
+    и общий аккаунт STAFF для всех сотрудников при создании нового магазина.
     """
     if created:
         try:
+            # 1. Создаём Employee для владельца
             Employee.objects.create(
                 user=instance.owner,
                 store=instance,
@@ -461,5 +471,35 @@ def create_owner_employee(sender, instance, created, **kwargs):
             )
             logger.info(f"Created owner employee for store: {instance.name}")
 
+            # 2. Создаём общий аккаунт для сотрудников (кассиров/складчиков)
+            staff_username = f"{instance.slug}_staff"
+            staff_password = "12345678"
+
+            # Проверяем, не существует ли уже такой username
+            if not User.objects.filter(username=staff_username).exists():
+                staff_user = User.objects.create_user(
+                    username=staff_username,
+                    password=staff_password,
+                    first_name="Сотрудники",
+                    last_name=instance.name,
+                    is_active=True
+                )
+
+                # Создаём Employee запись для этого общего аккаунта
+                Employee.objects.create(
+                    user=staff_user,
+                    store=instance,
+                    role=Employee.Role.STAFF,
+                    first_name="Сотрудники",
+                    last_name=instance.name
+                )
+
+                logger.info(
+                    f"Created staff account for store: {instance.name}, "
+                    f"username: {staff_username}, password: {staff_password}"
+                )
+            else:
+                logger.warning(f"Staff username {staff_username} already exists, skipping creation")
+
         except Exception as e:
-            logger.error(f"Error creating owner employee: {e}")
+            logger.error(f"Error creating owner/staff employee: {e}")

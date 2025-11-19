@@ -551,7 +551,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Формируем список магазинов с tenant_key
         available_stores = []
         for emp in stores:
-            available_stores.append({
+            store_data = {
                 'id': emp.store.id,
                 'name': emp.store.name,
                 'slug': emp.store.slug,
@@ -559,7 +559,28 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'role': emp.role,
                 'role_display': emp.get_role_display(),
                 'permissions': emp.permissions
-            })
+            }
+
+            # Если роль STAFF, добавляем список кассиров для выбора
+            if emp.role == Employee.Role.STAFF:
+                cashiers = Employee.objects.filter(
+                    store=emp.store,
+                    role__in=[Employee.Role.CASHIER, Employee.Role.STOCKKEEPER],
+                    is_active=True,
+                    user__isnull=True  # Только кассиры без user аккаунта
+                ).values('id', 'first_name', 'last_name', 'phone', 'role')
+
+                store_data['cashiers'] = [
+                    {
+                        'id': c['id'],
+                        'full_name': f"{c['last_name']} {c['first_name']}".strip(),
+                        'phone': c['phone'],
+                        'role': c['role']
+                    }
+                    for c in cashiers
+                ]
+
+            available_stores.append(store_data)
 
         data['available_stores'] = available_stores
 
