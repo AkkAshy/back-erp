@@ -26,11 +26,13 @@ GET /api/sales/shifts/cashier-stats/
 
 | Параметр | Тип | Обязательный | По умолчанию | Описание |
 |----------|-----|--------------|--------------|----------|
-| `date_from` | string (ISO datetime) | Нет | Начало текущего месяца | Дата начала периода |
-| `date_to` | string (ISO datetime) | Нет | Сейчас | Дата окончания периода |
+| `date_from` | string | Нет | Начало текущего месяца | Дата начала периода |
+| `date_to` | string | Нет | Сейчас | Дата окончания периода |
 | `limit` | integer | Нет | Без ограничений | Количество топ-кассиров для вывода |
 
-**Формат даты:** `YYYY-MM-DDTHH:MM:SS` или `YYYY-MM-DD`
+**Формат даты:**
+- `YYYY-MM-DD` (рекомендуется) - автоматически добавляется `00:00:00` для `date_from` и `23:59:59` для `date_to`
+- `YYYY-MM-DDTHH:MM:SS` - точное время (для продвинутых запросов)
 
 ---
 
@@ -110,7 +112,8 @@ curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?limit=10" \
 ### 2. Топ 5 кассиров за определенный период
 
 ```bash
-curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2025-11-01T00:00:00&date_to=2025-11-30T23:59:59&limit=5" \
+# Простой формат (рекомендуется)
+curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2025-11-01&date_to=2025-11-30&limit=5" \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Key: test_shop_4dfa7a5a"
 ```
@@ -118,7 +121,8 @@ curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2
 ### 3. Все кассиры за сегодня
 
 ```bash
-curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2025-11-19T00:00:00&date_to=2025-11-19T23:59:59" \
+# Просто укажите одну и ту же дату
+curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2025-11-19&date_to=2025-11-19" \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Key: test_shop_4dfa7a5a"
 ```
@@ -126,13 +130,40 @@ curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=2
 ### 4. Топ 3 кассира за последние 7 дней
 
 ```bash
-# Получаем дату 7 дней назад
-DATE_FROM=$(date -u -d '7 days ago' +%Y-%m-%dT00:00:00)
-DATE_TO=$(date -u +%Y-%m-%dT23:59:59)
+# Получаем дату 7 дней назад (простой формат)
+DATE_FROM=$(date -u -d '7 days ago' +%Y-%m-%d)
+DATE_TO=$(date -u +%Y-%m-%d)
 
 curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=$DATE_FROM&date_to=$DATE_TO&limit=3" \
   -H "Authorization: Bearer $TOKEN" \
   -H "X-Tenant-Key: test_shop_4dfa7a5a"
+```
+
+### 5. Пример для фронтенда (JavaScript)
+
+```javascript
+// Функция получения топ кассиров
+async function getTopCashiers(dateFrom, dateTo, limit = 10) {
+  // Формат даты: YYYY-MM-DD (проще всего!)
+  const params = new URLSearchParams({
+    date_from: dateFrom,  // Например: "2025-11-01"
+    date_to: dateTo,      // Например: "2025-11-30"
+    limit: limit
+  });
+
+  const response = await api.get(`/sales/sessions/cashier-stats/?${params}`);
+  return response.data.data;
+}
+
+// Пример использования: топ 5 кассиров за сегодня
+const today = new Date().toISOString().split('T')[0]; // "2025-11-19"
+const stats = await getTopCashiers(today, today, 5);
+
+console.log(`Топ ${stats.total_cashiers} кассиров за ${today}:`);
+stats.cashiers.forEach((cashier, index) => {
+  console.log(`${index + 1}. ${cashier.full_name}: ${cashier.total_sales} сум`);
+  console.log(`   Продаж: ${cashier.sales_count}, Наличные: ${cashier.cash_sales}, Карта: ${cashier.card_sales}`);
+});
 ```
 
 ---
@@ -183,21 +214,28 @@ curl -X GET "http://localhost:8000/api/sales/sessions/cashier-stats/?date_from=$
 
 ## ⚠️ Важные замечания
 
-1. **Новая логика с Sale.cashier:**
+1. **Формат даты (YYYY-MM-DD):**
+   - Для `date_from` автоматически добавляется `T00:00:00` (начало дня)
+   - Для `date_to` автоматически добавляется `T23:59:59` (конец дня)
+   - ✅ **Правильно:** `?date_from=2025-11-01&date_to=2025-11-30`
+   - ❌ **Ошибка:** `?date_from=2025-11-01&date_to=2025-11-30T00:00:00` (будет пропущен весь день 30-го!)
+   - Если нужно точное время, используйте полный формат `YYYY-MM-DDTHH:MM:SS`
+
+2. **Новая логика с Sale.cashier:**
    - Статистика теперь основана на поле `Sale.cashier`, а не `CashierSession.cashier`
    - Это позволяет точно отслеживать, кто именно сделал каждую продажу
    - Несколько кассиров могут работать на одной смене одновременно
 
-2. **Миграция данных:**
+3. **Миграция данных:**
    - Старые продажи без `cashier` не будут учитываться в статистике
    - Только продажи, созданные после добавления поля `Sale.cashier`, будут учтены
 
-3. **Производительность:**
+4. **Производительность:**
    - Запрос оптимизирован с использованием агрегации Django ORM
    - Использует `Coalesce()` для обработки NULL значений
    - Минимальное количество запросов к БД (2 запроса: основной + платежи)
 
-4. **Timezone:**
+5. **Timezone:**
    - Все даты хранятся и возвращаются с учетом timezone сервера
    - При фильтрации учитывается timezone
 

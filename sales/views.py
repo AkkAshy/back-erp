@@ -295,12 +295,22 @@ class CashierSessionViewSet(viewsets.ModelViewSet):
         if not date_from:
             date_from = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
-            date_from = timezone.make_aware(datetime.fromisoformat(date_from))
+            # Поддержка формата YYYY-MM-DD и YYYY-MM-DDTHH:MM:SS
+            if 'T' not in date_from:
+                # Только дата - добавляем начало дня
+                date_from = timezone.make_aware(datetime.fromisoformat(f"{date_from}T00:00:00"))
+            else:
+                date_from = timezone.make_aware(datetime.fromisoformat(date_from))
 
         if not date_to:
             date_to = timezone.now()
         else:
-            date_to = timezone.make_aware(datetime.fromisoformat(date_to))
+            # Поддержка формата YYYY-MM-DD и YYYY-MM-DDTHH:MM:SS
+            if 'T' not in date_to:
+                # Только дата - добавляем конец дня
+                date_to = timezone.make_aware(datetime.fromisoformat(f"{date_to}T23:59:59"))
+            else:
+                date_to = timezone.make_aware(datetime.fromisoformat(date_to))
 
         # Получаем статистику по продажам напрямую из Sale.cashier
         from sales.models import Sale, Payment
