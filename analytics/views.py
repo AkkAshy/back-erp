@@ -175,14 +175,14 @@ class ProductPerformanceViewSet(viewsets.ReadOnlyModelViewSet):
             date__gte=start_date,
             date__lte=end_date
         ).values(
-            'product__id', 'product__name', 'product__code'
+            'product__id', 'product__name', 'product__sku'
         ).annotate(
             total_revenue=Sum('total_revenue'),
             total_quantity=Sum('quantity_sold'),
             total_profit=Sum('total_profit'),
             sales_count=Sum('sales_count')
         )
-        
+
         # Сортировка
         if order_by == 'quantity':
             performance = performance.order_by('-total_quantity')
@@ -190,15 +190,15 @@ class ProductPerformanceViewSet(viewsets.ReadOnlyModelViewSet):
             performance = performance.order_by('-total_profit')
         else:
             performance = performance.order_by('-total_revenue')
-        
+
         # Ограничиваем количество
         performance = performance[:limit]
-        
+
         # Преобразуем данные
         top_data = [{
             'product_id': p['product__id'],
             'product_name': p['product__name'],
-            'product_code': p['product__code'],
+            'product_sku': p['product__sku'],
             'total_revenue': p['total_revenue'],
             'total_quantity': p['total_quantity'],
             'total_profit': p['total_profit'],
@@ -225,7 +225,7 @@ class ProductPerformanceViewSet(viewsets.ReadOnlyModelViewSet):
         slow_products = self.queryset.filter(
             date__gte=start_date
         ).values(
-            'product__id', 'product__name', 'product__code'
+            'product__id', 'product__name', 'product__sku'
         ).annotate(
             total_quantity=Sum('quantity_sold')
         ).filter(

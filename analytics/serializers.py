@@ -102,10 +102,10 @@ class SalesTrendSerializer(serializers.Serializer):
 
 class TopProductSerializer(serializers.Serializer):
     """Сериализатор для топ товаров"""
-    
+
     product_id = serializers.IntegerField()
     product_name = serializers.CharField()
-    product_code = serializers.CharField()
+    product_sku = serializers.CharField()
     total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
     total_quantity = serializers.DecimalField(max_digits=12, decimal_places=3)
     total_profit = serializers.DecimalField(max_digits=12, decimal_places=2)
