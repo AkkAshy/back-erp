@@ -307,23 +307,31 @@ class ProductViewSet(viewsets.ModelViewSet):
         logger.info(f"Products with inventory count: {products_with_inventory.count()}")
 
         try:
+            # Получаем товары с учетом остатков
+            products_tracked = products_with_inventory.filter(
+                inventory__track_inventory=True
+            ).select_related('inventory').prefetch_related('batches')
+
+            # Фильтруем в Python, так как quantity - это property
+            low_stock_products = []
+
             if min_quantity_param:
                 # Используем переданный параметр min_quantity
                 min_quantity = float(min_quantity_param)
-                products = products_with_inventory.filter(
-                    inventory__track_inventory=True,
-                    inventory__quantity__gt=0,
-                    inventory__quantity__lte=min_quantity
-                )
-                logger.info(f"Filtered by min_quantity={min_quantity}, count: {products.count()}")
+                for product in products_tracked:
+                    qty = product.inventory.quantity
+                    if qty is not None and 0 < qty <= min_quantity:
+                        low_stock_products.append(product)
+                logger.info(f"Filtered by min_quantity={min_quantity}, count: {len(low_stock_products)}")
             else:
                 # Используем inventory__min_quantity
-                products = products_with_inventory.filter(
-                    inventory__track_inventory=True,
-                    inventory__quantity__gt=0,
-                    inventory__quantity__lte=F('inventory__min_quantity')
-                )
-                logger.info(f"Filtered by inventory__min_quantity, count: {products.count()}")
+                for product in products_tracked:
+                    qty = product.inventory.quantity
+                    if qty is not None and 0 < qty <= product.inventory.min_quantity:
+                        low_stock_products.append(product)
+                logger.info(f"Filtered by inventory__min_quantity, count: {len(low_stock_products)}")
+
+            products = low_stock_products
 
             page = self.paginate_queryset(products)
             if page is not None:
@@ -455,6 +463,137 @@ class ProductViewSet(viewsets.ModelViewSet):
         }
 
         return Response(label_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='scan_barcode')
+    def scan_barcode(self, request):
+        """
+        Найти товар по штрих-коду и опционально добавить в продажу.
+
+        GET /api/products/products/scan_barcode/?barcode=4870123456789&session=1&quantity=1
+
+        Query параметры:
+        - barcode (str): Штрих-код товара (обязательный)
+        - session (int): ID кассовой смены (опционально)
+        - quantity (number): Количество товара (опционально, по умолчанию 1)
+        - batch (int): ID партии товара (опционально)
+
+        Если указан session, товар автоматически добавляется в текущую продажу.
+        Возвращает информацию о товаре и обновлённую продажу (если добавлено).
+        """
+        from sales.models import CashierSession, Sale, SaleItem
+        from decimal import Decimal
+
+        barcode_value = request.query_params.get('barcode')
+        session_id = request.query_params.get('session')
+        quantity = request.query_params.get('quantity', '1')
+        batch_id = request.query_params.get('batch')
+
+        if not barcode_value:
+            return Response({
+                'status': 'error',
+                'message': 'Не указан штрих-код',
+                'code': 'barcode_required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Ищем товар по штрих-коду
+        try:
+            product = Product.objects.select_related(
+                'category', 'unit', 'pricing', 'inventory'
+            ).prefetch_related('attributes', 'images').get(
+                barcode=barcode_value,
+                is_active=True
+            )
+        except Product.DoesNotExist:
+            return Response({
+                'status': 'error',
+                'message': f'Товар с штрих-кодом "{barcode_value}" не найден',
+                'code': 'product_not_found',
+                'barcode': barcode_value
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        response_data = {
+            'status': 'success',
+            'data': ProductDetailSerializer(product).data
+        }
+
+        # Если указана смена, добавляем товар в продажу
+        if session_id:
+            try:
+                quantity = Decimal(str(quantity))
+                if quantity <= 0:
+                    return Response({
+                        'status': 'error',
+                        'message': 'Количество должно быть больше 0',
+                        'code': 'invalid_quantity'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                session = CashierSession.objects.get(id=session_id, status='open')
+            except CashierSession.DoesNotExist:
+                return Response({
+                    'status': 'error',
+                    'message': 'Смена не найдена или закрыта',
+                    'code': 'session_not_found'
+                }, status=status.HTTP_404_NOT_FOUND)
+            except (ValueError, TypeError):
+                return Response({
+                    'status': 'error',
+                    'message': 'Некорректное значение количества',
+                    'code': 'invalid_quantity'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            batch = None
+            if batch_id:
+                from products.models import ProductBatch
+                try:
+                    batch = ProductBatch.objects.get(id=batch_id, product=product)
+                except ProductBatch.DoesNotExist:
+                    return Response({
+                        'status': 'error',
+                        'message': 'Партия не найдена',
+                        'code': 'batch_not_found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+            # Ищем текущую незавершённую продажу этой смены
+            sale = Sale.objects.filter(
+                session=session,
+                status='pending'
+            ).order_by('-created_at').first()
+
+            # Если нет незавершённой продажи - создаём новую
+            if not sale:
+                # Генерируем номер чека
+                from django.utils import timezone
+                receipt_number = f"CHECK-{timezone.now().strftime('%Y%m%d%H%M%S')}"
+
+                sale = Sale.objects.create(
+                    session=session,
+                    receipt_number=receipt_number,
+                    status='pending'
+                )
+
+            # Получаем цену товара из pricing
+            unit_price = Decimal('0.00')
+            if hasattr(product, 'pricing') and product.pricing:
+                unit_price = product.pricing.sale_price or product.pricing.cost_price or Decimal('0.00')
+
+            # Добавляем позицию
+            sale_item = SaleItem.objects.create(
+                sale=sale,
+                product=product,
+                batch=batch,
+                quantity=quantity,
+                unit_price=unit_price
+            )
+
+            # Пересчитываем суммы
+            sale.calculate_totals()
+
+            # Импортируем сериализатор продажи
+            from sales.serializers import SaleDetailSerializer
+            response_data['sale'] = SaleDetailSerializer(sale).data
+            response_data['message'] = 'Товар добавлен в продажу'
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def add_attribute(self, request, pk=None):
