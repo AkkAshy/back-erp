@@ -493,6 +493,60 @@ class StoreViewSet(viewsets.ModelViewSet):
         """Устанавливаем текущего пользователя как владельца"""
         serializer.save(owner=self.request.user)
 
+    @action(detail=True, methods=['get'], url_path='staff-credentials')
+    def staff_credentials(self, request, pk=None):
+        """
+        Получить учетные данные общего staff аккаунта для магазина.
+
+        Доступно только владельцу магазина.
+
+        GET /api/users/stores/{id}/staff-credentials/
+
+        Response:
+        {
+            "status": "success",
+            "data": {
+                "username": "test_shop_staff",
+                "password": "12345678",
+                "full_name": "Сотрудники Тестовый Магазин",
+                "note": "Общий аккаунт для всех сотрудников магазина"
+            }
+        }
+        """
+        store = self.get_object()
+
+        # Проверяем, что пользователь - владелец магазина
+        if store.owner != request.user:
+            return Response({
+                'status': 'error',
+                'code': 'forbidden',
+                'message': 'Только владелец магазина может просматривать учетные данные'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # Формируем username общего аккаунта
+        staff_username = f"{store.slug}_staff"
+
+        # Проверяем, существует ли такой пользователь
+        try:
+            staff_user = User.objects.get(username=staff_username)
+
+            return Response({
+                'status': 'success',
+                'data': {
+                    'username': staff_username,
+                    'password': '12345678',  # Стандартный пароль (может быть изменен в будущем)
+                    'full_name': f"{staff_user.first_name} {staff_user.last_name}",
+                    'is_active': staff_user.is_active,
+                    'note': 'Общий аккаунт для всех сотрудников магазина. Используйте его для входа кассиров.'
+                }
+            })
+        except User.DoesNotExist:
+            return Response({
+                'status': 'error',
+                'code': 'not_found',
+                'message': f'Общий аккаунт для магазина "{store.name}" не найден. Возможно, он был удален.'
+            }, status=status.HTTP_404_NOT_FOUND)
+
 
 class EmployeeViewSet(viewsets.ModelViewSet):
     """
