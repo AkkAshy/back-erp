@@ -648,7 +648,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                     'id': employee.id,
                     'full_name': employee.full_name,
                     'username': username,
-                    'email': employee.user.email,
+                    'email': employee.user.email if employee.user else None,
                     'role': employee.role,
                     'role_display': employee.get_role_display(),
                     'phone': employee.phone,
@@ -659,7 +659,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 'credentials': {
                     'username': username,
                     'password': password  # Plaintext для владельца
-                }
+                } if username and password else None
             }
         }
 
