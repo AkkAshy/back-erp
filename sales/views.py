@@ -271,21 +271,25 @@ class CashierSessionViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='cashier-stats')
     def cashier_stats(self, request):
         """
-        Получить статистику по кассирам за период.
+        Получить топ статистику по кассирам за период.
 
-        GET /api/sales/cashier-sessions/cashier-stats/?date_from=2025-01-01&date_to=2025-01-31
+        GET /api/sales/cashier-sessions/cashier-stats/?date_from=2025-01-01&date_to=2025-01-31&limit=10
 
         Параметры:
         - date_from: начальная дата (опционально, по умолчанию начало месяца)
         - date_to: конечная дата (опционально, по умолчанию сегодня)
+        - limit: количество топ кассиров (опционально, по умолчанию все)
         """
-        from datetime import datetime, timedelta
-        from django.db.models import Sum, Count, Q
+        from datetime import datetime
+        from django.db.models import Sum, Count, Q, DecimalField
+        from django.db.models.functions import Coalesce
         from django.utils import timezone
+        from users.models import Employee
 
         # Параметры фильтрации по дате
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
+        limit = request.query_params.get('limit')
 
         # Дефолтные даты: начало месяца - сегодня
         if not date_from:
@@ -298,62 +302,64 @@ class CashierSessionViewSet(viewsets.ModelViewSet):
         else:
             date_to = timezone.make_aware(datetime.fromisoformat(date_to))
 
-        # Получаем все смены за период
-        sessions = CashierSession.objects.filter(
-            opened_at__gte=date_from,
-            opened_at__lte=date_to,
+        # Получаем статистику по продажам напрямую из Sale.cashier
+        from sales.models import Sale, Payment
+
+        cashier_stats = Sale.objects.filter(
+            created_at__gte=date_from,
+            created_at__lte=date_to,
+            status='completed',
             cashier__isnull=False
-        ).select_related('cashier')
+        ).values(
+            'cashier__id',
+            'cashier__first_name',
+            'cashier__last_name',
+            'cashier__phone',
+            'cashier__role'
+        ).annotate(
+            total_sales=Coalesce(Sum('total_amount'), 0, output_field=DecimalField()),
+            sales_count=Count('id')
+        ).order_by('-total_sales')
 
-        # Группируем по кассирам и считаем статистику
-        from collections import defaultdict
-        cashier_data = defaultdict(lambda: {
-            'total_sales': 0,
-            'cash_sales': 0,
-            'card_sales': 0,
-            'sessions_count': 0,
-            'sales_count': 0
-        })
+        # Получаем статистику по способам оплаты для каждого кассира
+        cashiers_list = []
+        for stat in cashier_stats:
+            cashier_id = stat['cashier__id']
 
-        for session in sessions:
-            cashier_id = session.cashier.id
-            cashier_name = session.cashier.full_name
-
-            # Статистика по продажам
-            sales_stats = session.sales.filter(status='completed').aggregate(
-                total=Sum('total_amount'),
-                count=Count('id')
+            # Статистика по оплатам
+            payment_stats = Payment.objects.filter(
+                sale__cashier_id=cashier_id,
+                sale__created_at__gte=date_from,
+                sale__created_at__lte=date_to,
+                sale__status='completed'
+            ).aggregate(
+                cash_total=Coalesce(Sum('amount', filter=Q(payment_method='cash')), 0, output_field=DecimalField()),
+                card_total=Coalesce(Sum('amount', filter=Q(payment_method='card')), 0, output_field=DecimalField())
             )
 
-            # Статистика по способам оплаты
-            cash_amount = session.payments.filter(
-                payment_method='cash',
-                sale__status='completed'
-            ).aggregate(total=Sum('amount'))['total'] or 0
+            # Подсчет смен (уникальных сессий, в которых кассир работал)
+            sessions_count = Sale.objects.filter(
+                cashier_id=cashier_id,
+                created_at__gte=date_from,
+                created_at__lte=date_to,
+                status='completed'
+            ).values('session').distinct().count()
 
-            card_amount = session.payments.filter(
-                payment_method='card',
-                sale__status='completed'
-            ).aggregate(total=Sum('amount'))['total'] or 0
+            cashiers_list.append({
+                'id': cashier_id,
+                'full_name': f"{stat['cashier__last_name']} {stat['cashier__first_name']}".strip(),
+                'phone': stat['cashier__phone'],
+                'role': stat['cashier__role'],
+                'total_sales': str(stat['total_sales']),
+                'cash_sales': str(payment_stats['cash_total']),
+                'card_sales': str(payment_stats['card_total']),
+                'sales_count': stat['sales_count'],
+                'sessions_count': sessions_count
+            })
 
-            if cashier_id not in cashier_data:
-                cashier_data[cashier_id]['id'] = cashier_id
-                cashier_data[cashier_id]['full_name'] = cashier_name
-                cashier_data[cashier_id]['phone'] = session.cashier.phone
-                cashier_data[cashier_id]['role'] = session.cashier.role
-
-            cashier_data[cashier_id]['total_sales'] += sales_stats['total'] or 0
-            cashier_data[cashier_id]['cash_sales'] += cash_amount
-            cashier_data[cashier_id]['card_sales'] += card_amount
-            cashier_data[cashier_id]['sessions_count'] += 1
-            cashier_data[cashier_id]['sales_count'] += sales_stats['count'] or 0
-
-        # Сортируем по общей сумме продаж (топ кассиров)
-        sorted_cashiers = sorted(
-            cashier_data.values(),
-            key=lambda x: x['total_sales'],
-            reverse=True
-        )
+        # Ограничиваем количество если указан limit
+        if limit:
+            cashiers_list = cashiers_list[:int(limit)]
 
         return Response({
             'status': 'success',
@@ -362,8 +368,8 @@ class CashierSessionViewSet(viewsets.ModelViewSet):
                     'from': date_from.isoformat(),
                     'to': date_to.isoformat()
                 },
-                'cashiers': sorted_cashiers,
-                'total_cashiers': len(sorted_cashiers)
+                'cashiers': cashiers_list,
+                'total_cashiers': len(cashiers_list)
             }
         })
 

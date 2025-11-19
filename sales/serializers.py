@@ -249,7 +249,7 @@ class SaleSerializer(serializers.ModelSerializer):
     """Сериализатор для продаж"""
 
     session_info = serializers.CharField(source='session.cash_register.name', read_only=True)
-    cashier_name = serializers.CharField(source='session.cashier_name', read_only=True)
+    cashier_name = serializers.CharField(read_only=True)  # Uses Sale.cashier_name property
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     # Информация о покупателе
