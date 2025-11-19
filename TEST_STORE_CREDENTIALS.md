@@ -26,6 +26,13 @@
 - Username: `test_shop_staff`
 - Password: `12345678`
 
+💡 **Как администратор может получить эти данные программно:**
+```bash
+GET /api/users/stores/2/staff-credentials/
+Authorization: Bearer {admin_token}
+```
+См. [STAFF_CREDENTIALS_API.md](STAFF_CREDENTIALS_API.md) для деталей.
+
 **Права:**
 - Создание продаж
 - Просмотр товаров
