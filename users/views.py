@@ -679,7 +679,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             }
         })
 
-    @action(detail=False, methods=['get'], url_path='cashiers')
+    @action(detail=False, methods=['get'], url_path='cashiers', permission_classes=[IsTenantUser])
     def get_cashiers(self, request):
         """
         Получить список кассиров для выбора при открытии смены.
@@ -687,6 +687,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         GET /api/users/employees/cashiers/
 
         Возвращает только активных кассиров текущего магазина.
+        Доступно всем авторизованным пользователям магазина (включая staff).
         """
         if not hasattr(request, 'tenant') or not request.tenant:
             return Response({
@@ -694,12 +695,13 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 'message': 'Не указан магазин'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Получаем всех активных кассиров
+        # Получаем всех активных кассиров (без user аккаунта)
         cashiers = Employee.objects.filter(
             store=request.tenant,
-            role=Employee.Role.CASHIER,
-            is_active=True
-        ).select_related('user')
+            role__in=[Employee.Role.CASHIER, Employee.Role.STOCKKEEPER],
+            is_active=True,
+            user__isnull=True  # Только кассиры без user аккаунта
+        )
 
         cashiers_data = []
         for cashier in cashiers:
@@ -707,7 +709,7 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 'id': cashier.id,
                 'full_name': cashier.full_name,
                 'phone': cashier.phone,
-                'photo': cashier.photo.url if cashier.photo else None,
+                'role': cashier.role,
             })
 
         return Response({
