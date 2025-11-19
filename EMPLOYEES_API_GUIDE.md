@@ -203,17 +203,30 @@ POST /api/users/employees/
 
 ### Request Body
 
+**Для кассира без аккаунта:**
 ```json
 {
   "first_name": "Мария",
   "last_name": "Васильева",
   "phone": "+998901234570",
-  "role": "cashier",
-  "hired_at": "2025-11-20"
+  "role": "cashier"
 }
 ```
 
-### Пример
+**Для менеджера с аккаунтом:**
+```json
+{
+  "first_name": "Петр",
+  "last_name": "Сидоров",
+  "phone": "+998901234571",
+  "role": "manager",
+  "username": "manager_petrov",
+  "password": "manager12345",
+  "email": "petrov@testshop.com"
+}
+```
+
+### Пример 1: Создание кассира без аккаунта
 
 ```bash
 curl -X POST "http://localhost:8000/api/users/employees/" \
@@ -228,23 +241,118 @@ curl -X POST "http://localhost:8000/api/users/employees/" \
   }'
 ```
 
-### JavaScript пример
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Сотрудник успешно создан",
+  "data": {
+    "employee": {
+      "id": 15,
+      "full_name": "Васильева Мария",
+      "username": null,
+      "email": null,
+      "role": "cashier",
+      "role_display": "Кассир",
+      "phone": "+998901234570",
+      "position": "",
+      "is_active": true,
+      "hired_at": "2025-11-20"
+    },
+    "credentials": null
+  }
+}
+```
+
+### Пример 2: Создание менеджера с аккаунтом
+
+```bash
+curl -X POST "http://localhost:8000/api/users/employees/" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "X-Tenant-Key: test_shop_4dfa7a5a" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "Петр",
+    "last_name": "Сидоров",
+    "phone": "+998901234571",
+    "role": "manager",
+    "username": "manager_petrov",
+    "password": "manager12345",
+    "email": "petrov@testshop.com"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "status": "success",
+  "message": "Сотрудник успешно создан",
+  "data": {
+    "employee": {
+      "id": 16,
+      "full_name": "Петр Сидоров",
+      "username": "manager_petrov",
+      "email": "petrov@testshop.com",
+      "role": "manager",
+      "role_display": "Менеджер",
+      "phone": "+998901234571",
+      "position": "",
+      "is_active": true,
+      "hired_at": "2025-11-20"
+    },
+    "credentials": {
+      "username": "manager_petrov",
+      "password": "manager12345"
+    }
+  }
+}
+```
+
+### JavaScript примеры
 
 ```javascript
+// Создание кассира БЕЗ user аккаунта (только для выбора при продаже)
 async function createCashier(firstName, lastName, phone) {
   const response = await api.post('/users/employees/', {
     first_name: firstName,
     last_name: lastName,
     phone: phone,
     role: 'cashier'
+    // НЕ указываем username/password!
   });
 
-  return response.data;
+  const { employee, credentials } = response.data.data;
+  console.log('Создан кассир:', employee.full_name);
+  console.log('Credentials:', credentials); // null для кассиров без аккаунта
+
+  return employee;
+}
+
+// Создание менеджера С user аккаунтом (может логиниться)
+async function createManager(firstName, lastName, phone, username, password, email) {
+  const response = await api.post('/users/employees/', {
+    first_name: firstName,
+    last_name: lastName,
+    phone: phone,
+    role: 'manager',
+    username: username,
+    password: password,
+    email: email
+  });
+
+  const { employee, credentials } = response.data.data;
+  console.log('Создан менеджер:', employee.full_name);
+  console.log('Логин:', credentials.username);
+  console.log('Пароль:', credentials.password); // Только для владельца!
+
+  return { employee, credentials };
 }
 
 // Использование
-const newCashier = await createCashier('Мария', 'Васильева', '+998901234570');
-console.log('Создан кассир:', newCashier);
+const cashier = await createCashier('Мария', 'Васильева', '+998901234570');
+const manager = await createManager('Петр', 'Сидоров', '+998901234571', 'manager_petrov', 'manager12345', 'petrov@testshop.com');
 ```
 
 ---
@@ -337,16 +445,26 @@ await api.patch(`/users/employees/${employeeId}/`, {
 
 ## ⚠️ Важные замечания
 
-1. **Кассиры без User аккаунта:**
-   - Создаются через `/employees/` endpoint
-   - Не имеют логина/пароля
-   - Выбираются из списка при продаже
-   - Логинятся через общий staff аккаунт
+1. **Два типа сотрудников:**
 
-2. **Администраторы:**
-   - Имеют связь с User (`user` поле не null)
-   - Не отображаются в `/cashiers/` endpoint
-   - Отображаются в `/employees/` endpoint
+   **Кассиры БЕЗ user аккаунта (рекомендуется для большинства):**
+   - ✅ Создаются БЕЗ указания `username` и `password`
+   - ✅ Не могут логиниться самостоятельно
+   - ✅ Выбираются из списка при создании продажи
+   - ✅ Работают через общий staff аккаунт (`test_shop_staff`)
+   - ✅ Response содержит `"credentials": null`
+   - 📌 **Используйте этот способ для обычных кассиров**
+
+   **Сотрудники С user аккаунтом (для менеджеров/администраторов):**
+   - ✅ Создаются С указанием `username`, `password`, `email`
+   - ✅ Могут логиниться самостоятельно
+   - ✅ Имеют индивидуальные права доступа
+   - ✅ Response содержит credentials с паролем (только для владельца!)
+   - 📌 **Используйте этот способ для менеджеров и администраторов**
+
+2. **Endpoint `/cashiers/` vs `/employees/`:**
+   - `/cashiers/` - только кассиры БЕЗ user аккаунта (для выбора при продаже)
+   - `/employees/` - ВСЕ сотрудники (включая с user аккаунтами)
 
 3. **Права доступа:**
    - `/cashiers/` - доступен всем авторизованным (включая staff)
@@ -355,6 +473,10 @@ await api.patch(`/users/employees/${employeeId}/`, {
 4. **Автоматическая фильтрация:**
    - Оба эндпоинта автоматически фильтруют по `request.tenant`
    - Не нужно указывать store_id
+
+5. **Обязательные поля при создании:**
+   - Для кассира БЕЗ аккаунта: `first_name`, `role` (phone опционален)
+   - Для сотрудника С аккаунтом: `first_name`, `role`, `username`, `password`
 
 ---
 
