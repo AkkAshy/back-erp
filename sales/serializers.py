@@ -75,7 +75,7 @@ class CashierSessionSerializer(serializers.ModelSerializer):
             'duration', 'total_sales', 'cash_sales', 'card_sales',
             'notes', 'opened_at', 'closed_at'
         ]
-        read_only_fields = ['id', 'expected_cash', 'cash_difference', 'opened_at', 'closed_at', 'cashier_name']
+        read_only_fields = ['id', 'expected_cash', 'cash_difference', 'opened_at', 'closed_at', 'cashier_name', 'cash_register']
 
     def validate_cashier_id(self, value):
         """Проверяем что кассир существует и активен"""
@@ -109,9 +109,21 @@ class CashierSessionSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         """Валидация кассовой смены"""
+        from sales.models import CashRegister
+
         cash_register = data.get('cash_register')
 
+        # Если касса не указана, используем общую (первую активную)
+        if not cash_register:
+            default_register = CashRegister.objects.filter(is_active=True).first()
+            if not default_register:
+                raise serializers.ValidationError({
+                    'cash_register': 'В магазине нет активных касс'
+                })
+            data['cash_register'] = default_register
+
         # Проверяем что нет уже открытой смены на этой кассе
+        cash_register = data.get('cash_register')
         if cash_register:
             existing_session = CashierSession.objects.filter(
                 cash_register=cash_register,

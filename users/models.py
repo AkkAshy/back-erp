@@ -458,8 +458,9 @@ def update_user_groups(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Store)
 def create_owner_employee(sender, instance, created, **kwargs):
     """
-    Автоматически создаём запись Employee с ролью OWNER
-    и общий аккаунт STAFF для всех сотрудников при создании нового магазина.
+    Автоматически создаём запись Employee с ролью OWNER,
+    общий аккаунт STAFF для всех сотрудников,
+    и общую кассу при создании нового магазина.
     """
     if created:
         try:
@@ -501,5 +502,33 @@ def create_owner_employee(sender, instance, created, **kwargs):
             else:
                 logger.warning(f"Staff username {staff_username} already exists, skipping creation")
 
+            # 3. Создаём общую кассу в tenant схеме
+            from django.db import connection
+            from sales.models import CashRegister
+
+            # Переключаемся на схему тенанта
+            with connection.cursor() as cursor:
+                cursor.execute(f"SET search_path TO {instance.schema_name}")
+
+            # Создаём общую кассу
+            CashRegister.objects.create(
+                name="Основная касса",
+                code=f"{instance.slug}_main",
+                location="Главный зал",
+                is_active=True
+            )
+
+            # Возвращаем схему обратно в public
+            with connection.cursor() as cursor:
+                cursor.execute("SET search_path TO public")
+
+            logger.info(f"Created default cash register for store: {instance.name}")
+
         except Exception as e:
-            logger.error(f"Error creating owner/staff employee: {e}")
+            logger.error(f"Error creating owner/staff/cash register: {e}")
+            # Возвращаем схему обратно в public в случае ошибки
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SET search_path TO public")
+            except:
+                pass

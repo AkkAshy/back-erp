@@ -268,6 +268,105 @@ class CashierSessionViewSet(viewsets.ModelViewSet):
 
         return Response(report)
 
+    @action(detail=False, methods=['get'], url_path='cashier-stats')
+    def cashier_stats(self, request):
+        """
+        Получить статистику по кассирам за период.
+
+        GET /api/sales/cashier-sessions/cashier-stats/?date_from=2025-01-01&date_to=2025-01-31
+
+        Параметры:
+        - date_from: начальная дата (опционально, по умолчанию начало месяца)
+        - date_to: конечная дата (опционально, по умолчанию сегодня)
+        """
+        from datetime import datetime, timedelta
+        from django.db.models import Sum, Count, Q
+        from django.utils import timezone
+
+        # Параметры фильтрации по дате
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+
+        # Дефолтные даты: начало месяца - сегодня
+        if not date_from:
+            date_from = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            date_from = timezone.make_aware(datetime.fromisoformat(date_from))
+
+        if not date_to:
+            date_to = timezone.now()
+        else:
+            date_to = timezone.make_aware(datetime.fromisoformat(date_to))
+
+        # Получаем все смены за период
+        sessions = CashierSession.objects.filter(
+            opened_at__gte=date_from,
+            opened_at__lte=date_to,
+            cashier__isnull=False
+        ).select_related('cashier')
+
+        # Группируем по кассирам и считаем статистику
+        from collections import defaultdict
+        cashier_data = defaultdict(lambda: {
+            'total_sales': 0,
+            'cash_sales': 0,
+            'card_sales': 0,
+            'sessions_count': 0,
+            'sales_count': 0
+        })
+
+        for session in sessions:
+            cashier_id = session.cashier.id
+            cashier_name = session.cashier.full_name
+
+            # Статистика по продажам
+            sales_stats = session.sales.filter(status='completed').aggregate(
+                total=Sum('total_amount'),
+                count=Count('id')
+            )
+
+            # Статистика по способам оплаты
+            cash_amount = session.payments.filter(
+                payment_method='cash',
+                sale__status='completed'
+            ).aggregate(total=Sum('amount'))['total'] or 0
+
+            card_amount = session.payments.filter(
+                payment_method='card',
+                sale__status='completed'
+            ).aggregate(total=Sum('amount'))['total'] or 0
+
+            if cashier_id not in cashier_data:
+                cashier_data[cashier_id]['id'] = cashier_id
+                cashier_data[cashier_id]['full_name'] = cashier_name
+                cashier_data[cashier_id]['phone'] = session.cashier.phone
+                cashier_data[cashier_id]['role'] = session.cashier.role
+
+            cashier_data[cashier_id]['total_sales'] += sales_stats['total'] or 0
+            cashier_data[cashier_id]['cash_sales'] += cash_amount
+            cashier_data[cashier_id]['card_sales'] += card_amount
+            cashier_data[cashier_id]['sessions_count'] += 1
+            cashier_data[cashier_id]['sales_count'] += sales_stats['count'] or 0
+
+        # Сортируем по общей сумме продаж (топ кассиров)
+        sorted_cashiers = sorted(
+            cashier_data.values(),
+            key=lambda x: x['total_sales'],
+            reverse=True
+        )
+
+        return Response({
+            'status': 'success',
+            'data': {
+                'period': {
+                    'from': date_from.isoformat(),
+                    'to': date_to.isoformat()
+                },
+                'cashiers': sorted_cashiers,
+                'total_cashiers': len(sorted_cashiers)
+            }
+        })
+
     @action(detail=False, methods=['get'])
     def active(self, request):
         """Получить все активные смены"""
@@ -376,14 +475,27 @@ class SaleViewSet(viewsets.ModelViewSet):
         if hasattr(product, 'pricing') and product.pricing:
             unit_price = product.pricing.sale_price or product.pricing.cost_price or Decimal('0.00')
 
-        # Добавляем позицию
-        sale_item = SaleItem.objects.create(
+        # Проверяем, есть ли уже такой товар в продаже
+        existing_item = SaleItem.objects.filter(
             sale=sale,
             product=product,
-            batch=batch,
-            quantity=quantity,
-            unit_price=unit_price
-        )
+            batch=batch
+        ).first()
+
+        if existing_item:
+            # Увеличиваем количество существующей позиции
+            existing_item.quantity += quantity
+            existing_item.save()
+            sale_item = existing_item
+        else:
+            # Создаём новую позицию
+            sale_item = SaleItem.objects.create(
+                sale=sale,
+                product=product,
+                batch=batch,
+                quantity=quantity,
+                unit_price=unit_price
+            )
 
         # Пересчитываем суммы
         sale.calculate_totals()
