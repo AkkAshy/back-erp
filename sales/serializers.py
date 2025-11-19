@@ -51,6 +51,14 @@ class CashierSessionSerializer(serializers.ModelSerializer):
     cash_register_name = serializers.CharField(source='cash_register.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
+    # Кассир - новое поле
+    cashier_id = serializers.IntegerField(
+        source='cashier.id',
+        write_only=True,
+        help_text="ID кассира (Employee)"
+    )
+    cashier_full_name = serializers.CharField(source='cashier.full_name', read_only=True)
+
     # Вычисляемые поля
     duration = serializers.SerializerMethodField()
     total_sales = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -60,13 +68,37 @@ class CashierSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashierSession
         fields = [
-            'id', 'cash_register', 'cash_register_name', 'cashier_name',
+            'id', 'cash_register', 'cash_register_name',
+            'cashier_id', 'cashier_full_name', 'cashier_name',  # Новые поля
             'status', 'status_display',
             'opening_cash', 'expected_cash', 'actual_cash', 'cash_difference',
             'duration', 'total_sales', 'cash_sales', 'card_sales',
             'notes', 'opened_at', 'closed_at'
         ]
-        read_only_fields = ['id', 'expected_cash', 'cash_difference', 'opened_at', 'closed_at']
+        read_only_fields = ['id', 'expected_cash', 'cash_difference', 'opened_at', 'closed_at', 'cashier_name']
+
+    def validate_cashier_id(self, value):
+        """Проверяем что кассир существует и активен"""
+        from users.models import Employee
+        request = self.context.get('request')
+
+        if not request or not hasattr(request, 'tenant'):
+            raise serializers.ValidationError("Не удалось определить магазин")
+
+        try:
+            cashier = Employee.objects.get(
+                id=value,
+                store=request.tenant,
+                role='cashier',
+                is_active=True
+            )
+            # Сохраняем объект для использования в create/update
+            self._cashier = cashier
+            return value
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError(
+                f"Кассир с ID {value} не найден или неактивен в вашем магазине"
+            )
 
     def get_duration(self, obj):
         """Длительность смены в секундах"""
@@ -241,10 +273,21 @@ class SaleSerializer(serializers.ModelSerializer):
         session = data.get('session')
 
         # Проверяем что смена открыта
-        if session and session.status != 'open':
-            raise serializers.ValidationError({
-                'session': 'Смена закрыта, невозможно создать продажу'
-            })
+        if session:
+            # Если session это ID (число), получаем объект из базы
+            if isinstance(session, int):
+                try:
+                    session = CashierSession.objects.get(pk=session)
+                except CashierSession.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'session': 'Смена не найдена'
+                    })
+
+            # Проверяем статус смены
+            if session.status != 'open':
+                raise serializers.ValidationError({
+                    'session': 'Смена закрыта, невозможно создать продажу'
+                })
 
         # Проверяем уникальность номера чека
         receipt_number = data.get('receipt_number')
@@ -375,6 +418,29 @@ class SaleCreateUpdateSerializer(serializers.ModelSerializer):
             'items', 'payments'
         ]
         read_only_fields = ['customer']
+
+    def validate(self, data):
+        """Валидация продажи"""
+        session = data.get('session')
+
+        # Проверяем что смена открыта
+        if session:
+            # Если session это ID (число), получаем объект из базы
+            if isinstance(session, int):
+                try:
+                    session = CashierSession.objects.get(pk=session)
+                except CashierSession.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'session': 'Смена не найдена'
+                    })
+
+            # Проверяем статус смены
+            if session.status != 'open':
+                raise serializers.ValidationError({
+                    'session': 'Смена закрыта, невозможно создать продажу'
+                })
+
+        return data
 
     @transaction.atomic
     def create(self, validated_data):

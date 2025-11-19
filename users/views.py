@@ -679,6 +679,42 @@ class EmployeeViewSet(viewsets.ModelViewSet):
             }
         })
 
+    @action(detail=False, methods=['get'], url_path='cashiers')
+    def get_cashiers(self, request):
+        """
+        Получить список кассиров для выбора при открытии смены.
+
+        GET /api/users/employees/cashiers/
+
+        Возвращает только активных кассиров текущего магазина.
+        """
+        if not hasattr(request, 'tenant') or not request.tenant:
+            return Response({
+                'status': 'error',
+                'message': 'Не указан магазин'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Получаем всех активных кассиров
+        cashiers = Employee.objects.filter(
+            store=request.tenant,
+            role=Employee.Role.CASHIER,
+            is_active=True
+        ).select_related('user')
+
+        cashiers_data = []
+        for cashier in cashiers:
+            cashiers_data.append({
+                'id': cashier.id,
+                'full_name': cashier.full_name,
+                'phone': cashier.phone,
+                'photo': cashier.photo.url if cashier.photo else None,
+            })
+
+        return Response({
+            'status': 'success',
+            'data': cashiers_data
+        })
+
 
 class UserViewSet(viewsets.ModelViewSet):
     """

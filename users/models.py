@@ -227,7 +227,10 @@ class Employee(models.Model):
         User,
         on_delete=models.CASCADE,
         related_name='employments',
-        verbose_name=_('Пользователь')
+        verbose_name=_('Пользователь'),
+        null=True,
+        blank=True,
+        help_text=_('Опционально. Для кассиров без аккаунта можно оставить пустым')
     )
 
     store = models.ForeignKey(
@@ -244,6 +247,21 @@ class Employee(models.Model):
         default=Role.CASHIER,
         verbose_name=_('Роль'),
         help_text=_('Роль сотрудника в магазине')
+    )
+
+    # Личные данные (для кассиров без user аккаунта)
+    first_name = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name=_('Имя'),
+        help_text=_('Имя сотрудника. Используется если нет user аккаунта')
+    )
+
+    last_name = models.CharField(
+        max_length=150,
+        blank=True,
+        verbose_name=_('Фамилия'),
+        help_text=_('Фамилия сотрудника. Используется если нет user аккаунта')
     )
 
     # Контактная информация
@@ -313,19 +331,43 @@ class Employee(models.Model):
         verbose_name = _('Сотрудник')
         verbose_name_plural = _('Сотрудники')
         ordering = ['-created_at']
-        unique_together = [('user', 'store')]  # Один user = одна запись в одном store
+        # Убрали unique_together т.к. user теперь может быть NULL
         indexes = [
             models.Index(fields=['user', 'store']),
             models.Index(fields=['role']),
             models.Index(fields=['is_active']),
         ]
+        constraints = [
+            # Если есть user, то должна быть уникальная комбинация user+store
+            models.UniqueConstraint(
+                fields=['user', 'store'],
+                condition=models.Q(user__isnull=False),
+                name='unique_user_store'
+            )
+        ]
 
     def __str__(self):
-        return f"{self.user.get_full_name() or self.user.username} - {self.store.name} ({self.get_role_display()})"
+        return f"{self.full_name} - {self.store.name} ({self.get_role_display()})"
+
+    @property
+    def full_name(self):
+        """Возвращает полное имя сотрудника"""
+        if self.user:
+            return self.user.get_full_name() or self.user.username
+        elif self.first_name or self.last_name:
+            return f"{self.last_name} {self.first_name}".strip()
+        else:
+            return f"Сотрудник #{self.id}"
 
     def clean(self):
         """Валидация перед сохранением"""
         super().clean()
+
+        # Валидация: должен быть либо user, либо first_name
+        if not self.user and not self.first_name:
+            raise ValidationError({
+                'first_name': _('Укажите либо user аккаунт, либо имя сотрудника')
+            })
 
         # Проверка: в магазине может быть только один владелец
         if self.role == self.Role.OWNER:
@@ -336,13 +378,8 @@ class Employee(models.Model):
 
             if existing_owner:
                 raise ValidationError({
-                    'role': _(f'В магазине уже есть владелец: {existing_owner.user.get_full_name()}')
+                    'role': _(f'В магазине уже есть владелец: {existing_owner.full_name}')
                 })
-
-    @property
-    def full_name(self):
-        """Полное имя сотрудника"""
-        return self.user.get_full_name() or self.user.username
 
     @property
     def permissions(self):

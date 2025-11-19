@@ -94,11 +94,24 @@ class CashierSession(models.Model):
         verbose_name=_('Касса')
     )
 
-    # Временно строка, позже будет FK к User
+    # Кассир (Employee) - может быть как с user аккаунтом, так и без
+    cashier = models.ForeignKey(
+        'users.Employee',
+        on_delete=models.PROTECT,
+        related_name='cashier_sessions',
+        null=True,
+        blank=True,
+        verbose_name=_('Кассир'),
+        help_text=_('Сотрудник, работающий на этой смене')
+    )
+
+    # Оставляем для обратной совместимости (deprecated)
     cashier_name = models.CharField(
         max_length=200,
-        verbose_name=_('Кассир'),
-        help_text=_('Временно строка, позже будет FK → User')
+        blank=True,
+        null=True,
+        verbose_name=_('Имя кассира (устарело)'),
+        help_text=_('Используется только для старых записей. Новые смены используют cashier (FK)')
     )
 
     status = models.CharField(
@@ -526,13 +539,16 @@ class SaleItem(models.Model):
         from products.models import StockReservation
 
         if not self.reservation:
+            # Пытаемся найти Employee через User кассира
+            # Поскольку в CashierSession нет прямой связи с Employee,
+            # а только cashier_name (строка), оставляем created_by = None
             reservation = StockReservation.objects.create(
                 product=self.product,
                 batch=self.batch,
                 quantity=self.quantity,
                 order_reference=self.sale.receipt_number,
                 status='active',
-                created_by=self.sale.session.cashier_name
+                created_by=None  # TODO: Добавить связь когда CashierSession будет иметь FK к Employee
             )
             self.reservation = reservation
             self.save()
@@ -604,12 +620,14 @@ class Payment(models.Model):
     card_last4 = models.CharField(
         max_length=4,
         blank=True,
+        null=True,
         verbose_name=_('Последние 4 цифры карты')
     )
 
     transaction_id = models.CharField(
         max_length=100,
         blank=True,
+        null=True,
         verbose_name=_('ID транзакции'),
         help_text=_('Номер транзакции для безналичных')
     )

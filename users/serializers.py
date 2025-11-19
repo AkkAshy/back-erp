@@ -95,15 +95,19 @@ class CreateEmployeeSerializer(serializers.Serializer):
     - Сотрудник может сменить пароль (опционально)
     """
 
-    # Данные пользователя
+    # Данные пользователя (опциональны для кассиров)
     username = serializers.CharField(
         max_length=150,
-        help_text="Логин для входа в систему"
+        required=False,
+        allow_blank=True,
+        help_text="Логин для входа в систему (опционально для кассиров)"
     )
     password = serializers.CharField(
         write_only=True,
+        required=False,
+        allow_blank=True,
         style={'input_type': 'password'},
-        help_text="Пароль сотрудника (минимум 8 символов)"
+        help_text="Пароль сотрудника (минимум 8 символов, опционально для кассиров)"
     )
     first_name = serializers.CharField(
         max_length=150,
@@ -162,10 +166,36 @@ class CreateEmployeeSerializer(serializers.Serializer):
             raise serializers.ValidationError(list(e.messages))
         return value
 
+    def validate(self, attrs):
+        """Валидация: для не-кассиров требуется username/password"""
+        role = attrs.get('role')
+        username = attrs.get('username')
+        password = attrs.get('password')
+
+        # Для всех ролей кроме кассира требуется аккаунт
+        if role != 'cashier' and (not username or not password):
+            raise serializers.ValidationError({
+                'username': 'Для этой роли требуется создание аккаунта (username и password)'
+            })
+
+        # Для кассиров аккаунт опционален
+        if role == 'cashier':
+            # Если указан username, то нужен и password
+            if username and not password:
+                raise serializers.ValidationError({
+                    'password': 'Если указан username, необходимо указать password'
+                })
+            if password and not username:
+                raise serializers.ValidationError({
+                    'username': 'Если указан password, необходимо указать username'
+                })
+
+        return attrs
+
     @transaction.atomic
     def create(self, validated_data):
         """
-        Создание User + Employee.
+        Создание Employee с опциональным User аккаунтом.
         Store берется из request.tenant (установлен middleware).
         """
 
@@ -175,24 +205,30 @@ class CreateEmployeeSerializer(serializers.Serializer):
             raise serializers.ValidationError("Не удалось определить магазин. Проверьте X-Tenant-Key header.")
 
         store = request.tenant
+        username = validated_data.get('username')
+        password = validated_data.get('password')
 
         try:
-            # 1. Создаем пользователя
-            user = User.objects.create_user(
-                username=validated_data['username'],
-                password=validated_data['password'],  # Хешируется автоматически
+            user = None
+
+            # 1. Создаем User только если указаны username/password
+            if username and password:
+                user = User.objects.create_user(
+                    username=username,
+                    password=password,  # Хешируется автоматически
+                    first_name=validated_data['first_name'],
+                    last_name=validated_data.get('last_name', ''),
+                    email=validated_data.get('email', ''),
+                    is_active=True
+                )
+                logger.info(f"Created user for employee: {user.username}")
+
+            # 2. Создаем Employee запись (с user или без)
+            employee = Employee.objects.create(
+                user=user,  # Может быть None для кассиров
+                store=store,
                 first_name=validated_data['first_name'],
                 last_name=validated_data.get('last_name', ''),
-                email=validated_data.get('email', ''),
-                is_active=True
-            )
-
-            logger.info(f"Created user for employee: {user.username}")
-
-            # 2. Создаем Employee запись
-            employee = Employee.objects.create(
-                user=user,
-                store=store,
                 role=validated_data['role'],
                 phone=validated_data.get('phone', ''),
                 position=validated_data.get('position', ''),
@@ -204,11 +240,11 @@ class CreateEmployeeSerializer(serializers.Serializer):
                 f"for store: {store.name} by {request.user.username}"
             )
 
-            # 3. Возвращаем данные включая plaintext пароль для владельца
+            # 3. Возвращаем данные
             return {
                 'employee': employee,
-                'username': user.username,
-                'password': validated_data['password']  # Plaintext для владельца
+                'username': username or None,
+                'password': password or None  # Plaintext для владельца (если был создан)
             }
 
         except Exception as e:
