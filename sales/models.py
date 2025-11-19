@@ -275,6 +275,17 @@ class Sale(models.Model):
         verbose_name=_('Кассовая смена')
     )
 
+    # Кассир, который совершил продажу
+    cashier = models.ForeignKey(
+        'users.Employee',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='sales',
+        verbose_name=_('Кассир'),
+        help_text=_('Кассир, который совершил продажу')
+    )
+
     receipt_number = models.CharField(
         max_length=50,
         unique=True,
@@ -385,6 +396,16 @@ class Sale(models.Model):
 
     def __str__(self):
         return f"Чек #{self.receipt_number} - {self.total_amount}"
+
+    @property
+    def cashier_name(self):
+        """Имя кассира"""
+        if self.cashier:
+            return self.cashier.full_name
+        # Fallback to session cashier if direct cashier not set
+        if self.session and self.session.cashier:
+            return self.session.cashier.full_name
+        return "Не указан"
 
     @property
     def items_count(self):

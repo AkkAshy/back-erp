@@ -51,13 +51,15 @@ class CashierSessionSerializer(serializers.ModelSerializer):
     cash_register_name = serializers.CharField(source='cash_register.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
-    # Кассир - новое поле
+    # Кассир - опциональное поле (для закрытия смены с привязкой к кассиру)
     cashier_id = serializers.IntegerField(
         source='cashier.id',
         write_only=True,
-        help_text="ID кассира (Employee)"
+        required=False,
+        allow_null=True,
+        help_text="ID кассира (Employee) - опционально"
     )
-    cashier_full_name = serializers.CharField(source='cashier.full_name', read_only=True)
+    cashier_full_name = serializers.CharField(source='cashier.full_name', read_only=True, allow_null=True)
 
     # Вычисляемые поля
     duration = serializers.SerializerMethodField()
@@ -78,7 +80,10 @@ class CashierSessionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'expected_cash', 'cash_difference', 'opened_at', 'closed_at', 'cashier_name', 'cash_register']
 
     def validate_cashier_id(self, value):
-        """Проверяем что кассир существует и активен"""
+        """Проверяем что кассир существует и активен (если указан)"""
+        if value is None:
+            return value
+
         from users.models import Employee
         request = self.context.get('request')
 
@@ -420,10 +425,17 @@ class SaleCreateUpdateSerializer(serializers.ModelSerializer):
     customer_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
     new_customer = CustomerNestedSerializer(required=False, allow_null=True, write_only=True)
 
+    # Кассир, который делает продажу
+    cashier_id = serializers.IntegerField(
+        required=True,
+        write_only=True,
+        help_text="ID кассира, который совершает продажу"
+    )
+
     class Meta:
         model = Sale
         fields = [
-            'session', 'receipt_number', 'status',
+            'session', 'cashier_id', 'receipt_number', 'status',
             'customer', 'customer_id', 'new_customer',
             'customer_name', 'customer_phone',
             'discount_percent', 'notes',
@@ -454,6 +466,23 @@ class SaleCreateUpdateSerializer(serializers.ModelSerializer):
 
         return data
 
+    def validate_cashier_id(self, value):
+        """Проверяем что кассир существует и активен"""
+        from users.models import Employee
+
+        try:
+            cashier = Employee.objects.get(id=value, is_active=True)
+
+            # Проверяем что это кассир или складчик
+            if cashier.role not in [Employee.Role.CASHIER, Employee.Role.STOCKKEEPER]:
+                raise serializers.ValidationError(
+                    'Выбранный сотрудник не является кассиром'
+                )
+
+            return value
+        except Employee.DoesNotExist:
+            raise serializers.ValidationError('Кассир с таким ID не найден')
+
     @transaction.atomic
     def create(self, validated_data):
         """Создание продажи с позициями и платежами"""
@@ -461,6 +490,12 @@ class SaleCreateUpdateSerializer(serializers.ModelSerializer):
         payments_data = validated_data.pop('payments', [])
         customer_id = validated_data.pop('customer_id', None)
         new_customer_data = validated_data.pop('new_customer', None)
+        cashier_id = validated_data.pop('cashier_id')
+
+        # Получаем кассира
+        from users.models import Employee
+        cashier = Employee.objects.get(id=cashier_id)
+        validated_data['cashier'] = cashier
 
         # Обработка покупателя
         customer_instance = None

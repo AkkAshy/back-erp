@@ -81,6 +81,8 @@ loginCashier()
 
 ## 2️⃣ Проверка/открытие смены
 
+⚠️ **ВАЖНО**: При открытии смены НЕ НУЖНО указывать кассира! Кассир выбирается при каждой продаже.
+
 ```javascript
 async function checkOpenSession() {
   try {
@@ -102,10 +104,8 @@ async function checkOpenSession() {
 }
 
 async function openSession(openingCash) {
-  const cashierId = localStorage.getItem('selected_cashier_id');
-
+  // ⭐ cashier_id НЕ НУЖЕН - смена общая для всех!
   const response = await api.post('/sales/cashier-sessions/', {
-    cashier_id: parseInt(cashierId),
     opening_cash: openingCash
   });
 
@@ -163,8 +163,10 @@ scanProduct('4600051000014');
 
 ## 4️⃣ Создание продажи
 
+⚠️ **ВАЖНО**: При создании продажи ОБЯЗАТЕЛЬНО указывать `cashier_id`!
+
 ```javascript
-async function createSale(customerPhone = '', paymentMethod = 'cash', receivedAmount = null) {
+async function createSale(cashierId, customerPhone = '', paymentMethod = 'cash', receivedAmount = null) {
   const sessionId = localStorage.getItem('session_id');
 
   // Prepare items
@@ -191,6 +193,7 @@ async function createSale(customerPhone = '', paymentMethod = 'cash', receivedAm
   // Create sale
   const response = await api.post('/sales/sales/', {
     session: parseInt(sessionId),
+    cashier_id: cashierId,  // ⭐ ОБЯЗАТЕЛЬНОЕ ПОЛЕ!
     customer_phone: customerPhone,
     items: items,
     payments: payments,
@@ -210,12 +213,14 @@ async function createSale(customerPhone = '', paymentMethod = 'cash', receivedAm
 
 function printReceipt(sale) {
   console.log('Receipt:', sale.receipt_number);
+  console.log('Cashier:', sale.cashier_name);  // ⭐ Имя кассира в ответе
   console.log('Total:', sale.total_amount);
   console.log('Change:', sale.payments[0].change_amount);
 }
 
 // Usage:
-createSale('+998901234567', 'cash', '60000.00');
+const cashierId = localStorage.getItem('selected_cashier_id');
+createSale(parseInt(cashierId), '+998901234567', 'cash', '60000.00');
 ```
 
 ---
