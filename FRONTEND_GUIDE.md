@@ -474,7 +474,7 @@ Content-Type: application/json
 
 ### 2. Сканирование штрихкода
 
-**Endpoint:** `POST /api/products/scan/`
+**Endpoint:** `POST /api/products/scan_barcode/`
 
 **Headers:**
 ```

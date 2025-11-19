@@ -67,9 +67,9 @@ class UserSerializer(serializers.ModelSerializer):
 class EmployeeSerializer(serializers.ModelSerializer):
     """Сериализатор для Employee"""
 
-    full_name = serializers.CharField(source='user.get_full_name', read_only=True)
-    username = serializers.CharField(source='user.username', read_only=True)
-    email = serializers.EmailField(source='user.email', read_only=True)
+    full_name = serializers.SerializerMethodField()
+    username = serializers.SerializerMethodField()
+    email = serializers.SerializerMethodField()
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     sex_display = serializers.CharField(source='get_sex_display', read_only=True)
 
@@ -81,6 +81,20 @@ class EmployeeSerializer(serializers.ModelSerializer):
             'position', 'sex', 'sex_display', 'is_active', 'hired_at', 'created_at'
         ]
         read_only_fields = ['id', 'user', 'hired_at', 'created_at']
+
+    def get_full_name(self, obj):
+        """Получить полное имя - из User или из Employee"""
+        if obj.user:
+            return obj.user.get_full_name()
+        return obj.full_name  # Employee.full_name property
+
+    def get_username(self, obj):
+        """Получить username - только если есть User"""
+        return obj.user.username if obj.user else None
+
+    def get_email(self, obj):
+        """Получить email - только если есть User"""
+        return obj.user.email if obj.user else None
 
 
 class CreateEmployeeSerializer(serializers.Serializer):
