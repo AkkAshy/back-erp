@@ -146,7 +146,7 @@ class ProductPerformanceViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ['date', 'total_revenue', 'quantity_sold', 'profit_margin']
     ordering = ['-date', '-total_revenue']
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='top-products')
     def top_products(self, request):
         """
         Топ товаров за период.
@@ -215,7 +215,7 @@ class ProductPerformanceViewSet(viewsets.ReadOnlyModelViewSet):
             'top_products': serializer.data
         })
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='slow-movers')
     def slow_movers(self, request):
         """Медленно продающиеся товары за последние 30 дней"""
         days = int(request.query_params.get('days', 30))
@@ -281,7 +281,7 @@ class CustomerAnalyticsViewSet(viewsets.ReadOnlyModelViewSet):
             'segments': serializer.data
         })
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='at-risk')
     def at_risk(self, request):
         """Клиенты в группе риска (At Risk, Can't Lose Them, Hibernating)"""
         
@@ -333,7 +333,7 @@ class InventorySnapshotViewSet(viewsets.ReadOnlyModelViewSet):
             'snapshots': serializer.data
         })
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='low-stock-alerts')
     def low_stock_alerts(self, request):
         """Товары с низким остатком"""
         
@@ -355,7 +355,7 @@ class InventorySnapshotViewSet(viewsets.ReadOnlyModelViewSet):
             'products': serializer.data
         })
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='out-of-stock')
     def out_of_stock(self, request):
         """Товары с нулевым остатком"""
         
