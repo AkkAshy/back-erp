@@ -9,16 +9,19 @@
 ## 🔗 Эндпоинт
 
 ```
-GET /api/users/stores/{store_id}/staff-credentials/
+GET /api/users/stores/staff-credentials/
 ```
+
+**Магазин определяется автоматически из заголовка `X-Tenant-Key`**
 
 ---
 
-## 📋 Parameters
+## 📋 Headers (обязательные)
 
-| Параметр | Тип | Расположение | Описание |
-|----------|-----|--------------|----------|
-| `store_id` | integer | URL path | ID магазина |
+| Заголовок | Описание | Пример |
+|-----------|----------|--------|
+| `Authorization` | Bearer токен владельца | `Bearer eyJhbGc...` |
+| `X-Tenant-Key` | Ключ магазина | `test_shop_4dfa7a5a` |
 
 ---
 
@@ -34,6 +37,8 @@ GET /api/users/stores/{store_id}/staff-credentials/
     "password": "12345678",
     "full_name": "Сотрудники Тестовый Магазин",
     "is_active": true,
+    "store_name": "Тестовый Магазин",
+    "tenant_key": "test_shop_4dfa7a5a",
     "note": "Общий аккаунт для всех сотрудников магазина. Используйте его для входа кассиров."
   }
 }
@@ -69,6 +74,8 @@ GET /api/users/stores/{store_id}/staff-credentials/
 | `password` | string | Пароль (по умолчанию: `12345678`) |
 | `full_name` | string | Полное имя аккаунта |
 | `is_active` | boolean | Активен ли аккаунт |
+| `store_name` | string | Название магазина |
+| `tenant_key` | string | Ключ магазина (тот же что в X-Tenant-Key) |
 | `note` | string | Подсказка по использованию |
 
 ---
@@ -78,7 +85,7 @@ GET /api/users/stores/{store_id}/staff-credentials/
 ### 1. Получить учетные данные для своего магазина
 
 ```bash
-curl -X GET "http://localhost:8000/api/users/stores/2/staff-credentials/" \
+curl -X GET "http://localhost:8000/api/users/stores/staff-credentials/" \
   -H "Authorization: Bearer $OWNER_TOKEN" \
   -H "X-Tenant-Key: test_shop_4dfa7a5a"
 ```
@@ -92,6 +99,8 @@ curl -X GET "http://localhost:8000/api/users/stores/2/staff-credentials/" \
     "password": "12345678",
     "full_name": "Сотрудники Тестовый Магазин",
     "is_active": true,
+    "store_name": "Тестовый Магазин",
+    "tenant_key": "test_shop_4dfa7a5a",
     "note": "Общий аккаунт для всех сотрудников магазина. Используйте его для входа кассиров."
   }
 }
@@ -100,11 +109,12 @@ curl -X GET "http://localhost:8000/api/users/stores/2/staff-credentials/" \
 ### 2. JavaScript пример
 
 ```javascript
-async function getStaffCredentials(storeId) {
+async function getStaffCredentials() {
   try {
-    const response = await api.get(`/users/stores/${storeId}/staff-credentials/`);
+    // Магазин определяется автоматически из X-Tenant-Key заголовка
+    const response = await api.get('/users/stores/staff-credentials/');
 
-    const { username, password, note } = response.data.data;
+    const { username, password, store_name, tenant_key, note } = response.data.data;
 
     console.log('Учетные данные для сотрудников:');
     console.log(`Логин: ${username}`);
@@ -122,8 +132,8 @@ async function getStaffCredentials(storeId) {
   }
 }
 
-// Использование
-const credentials = await getStaffCredentials(2);
+// Использование (без параметров!)
+const credentials = await getStaffCredentials();
 ```
 
 ### 3. React компонент - Отображение учетных данных
@@ -132,7 +142,7 @@ const credentials = await getStaffCredentials(2);
 import { useState, useEffect } from 'react';
 import { api } from './api';
 
-function StaffCredentials({ storeId }) {
+function StaffCredentials() {
   const [credentials, setCredentials] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -141,7 +151,8 @@ function StaffCredentials({ storeId }) {
   useEffect(() => {
     async function loadCredentials() {
       try {
-        const response = await api.get(`/users/stores/${storeId}/staff-credentials/`);
+        // Магазин определяется автоматически из X-Tenant-Key
+        const response = await api.get('/users/stores/staff-credentials/');
         setCredentials(response.data.data);
       } catch (err) {
         setError(err.response?.data?.message || 'Ошибка загрузки');
@@ -150,7 +161,7 @@ function StaffCredentials({ storeId }) {
       }
     }
     loadCredentials();
-  }, [storeId]);
+  }, []);
 
   const copyToClipboard = async (text, field) => {
     await navigator.clipboard.writeText(text);

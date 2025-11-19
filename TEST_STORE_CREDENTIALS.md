@@ -27,10 +27,15 @@
 - Password: `12345678`
 
 💡 **Как администратор может получить эти данные программно:**
+
 ```bash
-GET /api/users/stores/2/staff-credentials/
+GET /api/users/stores/staff-credentials/
 Authorization: Bearer {admin_token}
+X-Tenant-Key: test_shop_4dfa7a5a
 ```
+
+**Магазин определяется автоматически из X-Tenant-Key!**
+
 См. [STAFF_CREDENTIALS_API.md](STAFF_CREDENTIALS_API.md) для деталей.
 
 **Права:**

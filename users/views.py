@@ -493,14 +493,19 @@ class StoreViewSet(viewsets.ModelViewSet):
         """Устанавливаем текущего пользователя как владельца"""
         serializer.save(owner=self.request.user)
 
-    @action(detail=True, methods=['get'], url_path='staff-credentials')
-    def staff_credentials(self, request, pk=None):
+    @action(detail=False, methods=['get'], url_path='staff-credentials')
+    def staff_credentials(self, request):
         """
-        Получить учетные данные общего staff аккаунта для магазина.
+        Получить учетные данные общего staff аккаунта для текущего магазина.
 
+        Магазин определяется автоматически из X-Tenant-Key заголовка.
         Доступно только владельцу магазина.
 
-        GET /api/users/stores/{id}/staff-credentials/
+        GET /api/users/stores/staff-credentials/
+
+        Headers:
+        - X-Tenant-Key: test_shop_4dfa7a5a
+        - Authorization: Bearer {owner_token}
 
         Response:
         {
@@ -513,7 +518,15 @@ class StoreViewSet(viewsets.ModelViewSet):
             }
         }
         """
-        store = self.get_object()
+        # Получаем текущий магазин из tenant context
+        store = request.tenant
+
+        if not store:
+            return Response({
+                'status': 'error',
+                'code': 'bad_request',
+                'message': 'Не указан X-Tenant-Key заголовок'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Проверяем, что пользователь - владелец магазина
         if store.owner != request.user:
@@ -537,6 +550,8 @@ class StoreViewSet(viewsets.ModelViewSet):
                     'password': '12345678',  # Стандартный пароль (может быть изменен в будущем)
                     'full_name': f"{staff_user.first_name} {staff_user.last_name}",
                     'is_active': staff_user.is_active,
+                    'store_name': store.name,
+                    'tenant_key': store.tenant_key,
                     'note': 'Общий аккаунт для всех сотрудников магазина. Используйте его для входа кассиров.'
                 }
             })
