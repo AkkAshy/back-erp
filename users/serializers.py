@@ -186,7 +186,7 @@ class CreateEmployeeSerializer(serializers.Serializer):
     def validate(self, attrs):
         """
         Валидация: для не-кассиров требуется username/password (если создаем нового).
-        Если username существует - проверим в create().
+        Также проверяем безопасность для существующих пользователей.
         """
         role = attrs.get('role')
         username = attrs.get('username')
@@ -224,6 +224,56 @@ class CreateEmployeeSerializer(serializers.Serializer):
                     'username': 'Если указан password, необходимо указать username'
                 })
 
+        # ПРОВЕРКА БЕЗОПАСНОСТИ: если user существует, проверяем права владельца
+        if user_exists:
+            request = self.context.get('request')
+            store = request.tenant if hasattr(request, 'tenant') else None
+
+            if request and store:
+                user = User.objects.get(username=username)
+
+                # Проверяем что user уже работает в одном из магазинов владельца
+                # Используем отдельное подключение для проверки
+                from django.db import connection
+
+                owner_stores = Store.objects.filter(owner=request.user, is_active=True)
+                found_in_owner_store = False
+
+                # Сохраняем текущий search_path
+                with connection.cursor() as cursor:
+                    cursor.execute("SHOW search_path")
+                    original_path = cursor.fetchone()[0]
+
+                try:
+                    for owner_store in owner_stores:
+                        # Переключаемся на схему магазина владельца
+                        with connection.cursor() as cursor:
+                            cursor.execute(f'SET search_path TO "{owner_store.schema_name}", public')
+
+                        # Проверяем есть ли Employee с этим user
+                        if Employee.objects.filter(user=user).exists():
+                            found_in_owner_store = True
+                            break
+                finally:
+                    # ВСЕГДА возвращаем search_path обратно
+                    with connection.cursor() as cursor:
+                        cursor.execute(f'SET search_path TO {original_path}')
+
+                if not found_in_owner_store:
+                    raise serializers.ValidationError({
+                        'username': (
+                            f'Пользователь "{username}" не найден в ваших магазинах. '
+                            'Вы можете добавить только сотрудников, которые уже работают '
+                            'в одном из ваших магазинов.'
+                        )
+                    })
+
+                # Проверяем что не дублируем (уже в правильной схеме после reset)
+                if Employee.objects.filter(user=user, store=store).exists():
+                    raise serializers.ValidationError({
+                        'username': f'Сотрудник "{username}" уже работает в этом магазине'
+                    })
+
         return attrs
 
     @transaction.atomic
@@ -235,6 +285,8 @@ class CreateEmployeeSerializer(serializers.Serializer):
         Поддерживает два режима:
         1. Создание нового User + Employee (если username не существует)
         2. Добавление существующего User в другой магазин (если username существует)
+
+        Проверка безопасности выполняется в validate() ДО входа в транзакцию.
         """
 
         # Получаем store из контекста
@@ -256,57 +308,10 @@ class CreateEmployeeSerializer(serializers.Serializer):
                 try:
                     user = User.objects.get(username=username)
                     is_existing_user = True
-                    logger.info(f"Found existing user: {username}")
-
-                    # ПРОВЕРКА БЕЗОПАСНОСТИ: владелец может добавить только своих сотрудников
-                    # Проверяем что user уже работает в одном из магазинов владельца
-                    # Используем raw SQL для проверки по всем tenant схемам
-                    from django.db import connection
-
-                    owner_stores = Store.objects.filter(owner=request.user, is_active=True)
-                    found_in_owner_store = False
-
-                    for owner_store in owner_stores:
-                        # Переключаемся на схему магазина владельца
-                        with connection.cursor() as cursor:
-                            cursor.execute(f'SET search_path TO "{owner_store.schema_name}", public')
-
-                            # Проверяем есть ли Employee с этим user
-                            if Employee.objects.filter(user=user).exists():
-                                found_in_owner_store = True
-                                break
-
-                    # Возвращаем search_path
-                    with connection.cursor() as cursor:
-                        cursor.execute(f'SET search_path TO "{store.schema_name}", public')
-
-                    if not found_in_owner_store:
-                        raise serializers.ValidationError({
-                            'username': (
-                                f'Пользователь "{username}" не найден в ваших магазинах. '
-                                'Вы можете добавить только сотрудников, которые уже работают '
-                                'в одном из ваших магазинов.'
-                            )
-                        })
-
-                    # Проверяем что не дублируем
-                    if Employee.objects.filter(user=user, store=store).exists():
-                        raise serializers.ValidationError({
-                            'username': f'Сотрудник "{username}" уже работает в этом магазине'
-                        })
-
-                    logger.info(
-                        f"Adding existing user {username} to store {store.name} "
-                        f"by {request.user.username}"
-                    )
+                    logger.info(f"Adding existing user {username} to store {store.name}")
 
                 except User.DoesNotExist:
                     # User не существует - создаем нового
-                    if not password:
-                        raise serializers.ValidationError({
-                            'password': 'Для нового сотрудника требуется пароль'
-                        })
-
                     user = User.objects.create_user(
                         username=username,
                         password=password,  # Хешируется автоматически
@@ -707,57 +712,90 @@ class UserRegistrationSerializer(serializers.Serializer):
 
         return data
 
-    @transaction.atomic
     def create(self, validated_data):
         """
-        Создание User + Store + Employee в одной транзакции.
-        Все данные из одной формы регистрации.
+        Создание User + Store + Employee.
+
+        ВАЖНО: Не используем @transaction.atomic здесь, потому что:
+        1. Store.post_save signal создает PostgreSQL схему и переключает search_path
+        2. Если ошибка возникает внутри транзакции после schema switching,
+           транзакция становится невалидной и дальнейшие SQL запросы не работают
+        3. Схема и Employee создаются в сигнале, который должен быть вне основной транзакции
         """
 
         try:
-            # 1. Создаем пользователя
-            user = User.objects.create_user(
-                username=validated_data['username'],
-                password=validated_data['password'],
-                first_name=validated_data['first_name'],
-                last_name=validated_data.get('last_name', ''),
-                email=validated_data.get('email', ''),
-                is_staff=True,  # Владелец получает доступ к админке
-                is_active=True
-            )
+            # 1. Создаем пользователя (в отдельной транзакции)
+            with transaction.atomic():
+                user = User.objects.create_user(
+                    username=validated_data['username'],
+                    password=validated_data['password'],
+                    first_name=validated_data['first_name'],
+                    last_name=validated_data.get('last_name', ''),
+                    email=validated_data.get('email', ''),
+                    is_staff=True,  # Владелец получает доступ к админке
+                    is_active=True
+                )
 
             logger.info(f"Created user: {user.username}")
 
-            # 2. Создаем магазин со всеми данными
-            store = Store.objects.create(
-                name=validated_data['store_name'],
-                slug=validated_data['store_slug'],
-                description=validated_data.get('store_description', ''),
-                address=validated_data.get('store_address', ''),
-                city=validated_data.get('store_city', ''),
-                region=validated_data.get('store_region', ''),
-                phone=validated_data.get('store_phone', ''),
-                email=validated_data.get('store_email', ''),
-                legal_name=validated_data.get('store_legal_name', ''),
-                tax_id=validated_data.get('store_tax_id', ''),
-                owner=user,
-                is_active=True
-            )
+            # 2. Создаем магазин (в отдельной транзакции)
+            # post_save сигнал создаст схему и Employee автоматически
+            with transaction.atomic():
+                store = Store.objects.create(
+                    name=validated_data['store_name'],
+                    slug=validated_data['store_slug'],
+                    description=validated_data.get('store_description', ''),
+                    address=validated_data.get('store_address', ''),
+                    city=validated_data.get('store_city', ''),
+                    region=validated_data.get('store_region', ''),
+                    phone=validated_data.get('store_phone', ''),
+                    email=validated_data.get('store_email', ''),
+                    legal_name=validated_data.get('store_legal_name', ''),
+                    tax_id=validated_data.get('store_tax_id', ''),
+                    owner=user,
+                    is_active=True
+                )
 
             logger.info(f"Created store: {store.name} ({store.slug})")
 
-            # 3. Создаем PostgreSQL схему (если используется PostgreSQL)
-            if SchemaManager.create_schema(store.schema_name):
-                logger.info(f"Created schema: {store.schema_name}")
-            else:
-                logger.warning(f"Failed to create schema for store: {store.slug}")
+            # 3. Employee и схема создаются автоматически через сигнал post_save
+            # Даём время сигналу завершиться, потом обновляем телефон
+            from django.db import connection
+            import time
 
-            # 4. Employee запись создается автоматически через сигнал post_save
-            # Обновим телефон и отчество владельца
-            employee = Employee.objects.get(user=user, store=store)
-            if validated_data.get('owner_phone'):
-                employee.phone = validated_data['owner_phone']
-                employee.save(update_fields=['phone'])
+            # Небольшая задержка чтобы сигнал завершился
+            time.sleep(0.1)
+
+            # Сохраняем текущий search_path
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW search_path")
+                result = cursor.fetchone()
+                original_path = result[0] if result else "public"
+
+            employee = None
+            try:
+                # Переключаемся на схему магазина для поиска Employee
+                with connection.cursor() as cursor:
+                    cursor.execute(f'SET search_path TO "{store.schema_name}", public')
+
+                # Ищем Employee (создан сигналом в tenant schema)
+                try:
+                    employee = Employee.objects.get(user=user, store=store)
+                except Employee.DoesNotExist:
+                    # Если не нашли, возможно сигнал еще не завершился
+                    # Ждем еще немного и пробуем снова
+                    time.sleep(0.2)
+                    employee = Employee.objects.get(user=user, store=store)
+
+                # Обновляем телефон если передан
+                if validated_data.get('owner_phone'):
+                    employee.phone = validated_data['owner_phone']
+                    employee.save(update_fields=['phone'])
+
+            finally:
+                # ВСЕГДА возвращаем search_path обратно
+                with connection.cursor() as cursor:
+                    cursor.execute(f'SET search_path TO {original_path}')
 
             logger.info(f"Registration completed for: {user.username}")
 

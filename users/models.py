@@ -503,13 +503,21 @@ def create_owner_employee(sender, instance, created, **kwargs):
             else:
                 logger.warning(f"Failed to create schema for store: {instance.slug}")
 
-            # 1. Создаём Employee для владельца
+            # 1. Создаём Employee для владельца в tenant схеме
+            from django.db import connection
+            with connection.cursor() as cursor:
+                cursor.execute(f'SET search_path TO "{instance.schema_name}", public')
+
             Employee.objects.create(
                 user=instance.owner,
                 store=instance,
                 role=Employee.Role.OWNER
             )
             logger.info(f"Created owner employee for store: {instance.name}")
+
+            # Возвращаем search_path обратно
+            with connection.cursor() as cursor:
+                cursor.execute('SET search_path TO public')
 
             # 2. Создаём общий аккаунт для сотрудников (кассиров/складчиков)
             staff_username = f"{instance.slug}_staff"
@@ -525,6 +533,10 @@ def create_owner_employee(sender, instance, created, **kwargs):
                     is_active=True
                 )
 
+                # Переключаемся на tenant схему для создания Employee
+                with connection.cursor() as cursor:
+                    cursor.execute(f'SET search_path TO "{instance.schema_name}", public')
+
                 # Создаём Employee запись для этого общего аккаунта
                 Employee.objects.create(
                     user=staff_user,
@@ -533,6 +545,10 @@ def create_owner_employee(sender, instance, created, **kwargs):
                     first_name="Сотрудники",
                     last_name=instance.name
                 )
+
+                # Возвращаем search_path обратно
+                with connection.cursor() as cursor:
+                    cursor.execute('SET search_path TO public')
 
                 logger.info(
                     f"Created staff account for store: {instance.name}, "
