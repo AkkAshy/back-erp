@@ -266,8 +266,156 @@ class CreateEmployeeSerializer(serializers.Serializer):
             raise serializers.ValidationError(f"Ошибка при создании сотрудника: {str(e)}")
 
 
+class CreateStoreSerializer(serializers.Serializer):
+    """
+    Сериализатор для создания нового магазина существующим владельцем.
+    Автоматически создает Store + Employee(owner) + Staff User + Schema.
+    """
+
+    name = serializers.CharField(
+        max_length=255,
+        help_text="Название магазина"
+    )
+    slug = serializers.SlugField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text="Уникальный идентификатор магазина (если пусто - создастся автоматически)"
+    )
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Описание магазина"
+    )
+    address = serializers.CharField(
+        max_length=500,
+        required=False,
+        allow_blank=True,
+        help_text="Адрес магазина"
+    )
+    city = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text="Город"
+    )
+    region = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text="Область/регион"
+    )
+    phone = serializers.RegexField(
+        regex=r'^\+998\d{9}$',
+        required=False,
+        allow_blank=True,
+        help_text="Телефон магазина: +998XXXXXXXXX"
+    )
+    email = serializers.EmailField(
+        required=False,
+        allow_blank=True,
+        help_text="Email магазина"
+    )
+    legal_name = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        help_text="Юридическое название"
+    )
+    tax_id = serializers.CharField(
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        help_text="ИНН"
+    )
+
+    def validate_slug(self, value):
+        """Валидация slug"""
+        if value:
+            # Проверка формата
+            if not value.replace('_', '').isalnum():
+                raise serializers.ValidationError(
+                    "Слаг может содержать только буквы, цифры и подчеркивание"
+                )
+
+            # Не может начинаться с цифры
+            if value[0].isdigit():
+                raise serializers.ValidationError("Слаг не может начинаться с цифры")
+
+            # Проверка уникальности
+            if Store.objects.filter(slug=value.lower()).exists():
+                raise serializers.ValidationError("Магазин с таким slug уже существует")
+
+            return value.lower()
+
+        return value
+
+    def validate(self, data):
+        """Генерация slug если не указан"""
+        if not data.get('slug'):
+            base_slug = slugify(data['name'])
+            slug = base_slug
+            counter = 1
+
+            # Проверяем уникальность
+            while Store.objects.filter(slug=slug).exists():
+                slug = f"{base_slug}_{counter}"
+                counter += 1
+
+            data['slug'] = slug
+
+        return data
+
+    @transaction.atomic
+    def create(self, validated_data):
+        """
+        Создание Store + Employee(owner) + Staff User в одной транзакции.
+        Owner берется из request.user.
+        """
+        request = self.context.get('request')
+        if not request or not request.user:
+            raise serializers.ValidationError("Не удалось определить пользователя")
+
+        owner = request.user
+
+        try:
+            # 1. Создаем магазин
+            store = Store.objects.create(
+                name=validated_data['name'],
+                slug=validated_data['slug'],
+                description=validated_data.get('description', ''),
+                address=validated_data.get('address', ''),
+                city=validated_data.get('city', ''),
+                region=validated_data.get('region', ''),
+                phone=validated_data.get('phone', ''),
+                email=validated_data.get('email', ''),
+                legal_name=validated_data.get('legal_name', ''),
+                tax_id=validated_data.get('tax_id', ''),
+                owner=owner,
+                is_active=True
+            )
+
+            logger.info(f"Created store: {store.name} ({store.slug}) by {owner.username}")
+
+            # 2. Создаем PostgreSQL схему
+            if SchemaManager.create_schema(store.schema_name):
+                logger.info(f"Created schema: {store.schema_name}")
+            else:
+                logger.warning(f"Failed to create schema for store: {store.slug}")
+
+            # 3. Employee(owner) и Staff User создаются автоматически через signal
+
+            logger.info(f"Store creation completed: {store.name}")
+
+            return store
+
+        except Exception as e:
+            logger.error(f"Error creating store: {e}", exc_info=True)
+            raise serializers.ValidationError(f"Ошибка при создании магазина: {str(e)}")
+
+
 class StoreSerializer(serializers.ModelSerializer):
-    """Сериализатор для Store"""
+    """Сериализатор для Store (для GET/UPDATE)"""
 
     owner_name = serializers.CharField(source='owner.get_full_name', read_only=True)
     employee_count = serializers.IntegerField(read_only=True)

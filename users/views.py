@@ -19,6 +19,7 @@ from users.serializers import (
     UserRegistrationSerializer,
     CustomTokenObtainPairSerializer,
     StoreSerializer,
+    CreateStoreSerializer,
     EmployeeSerializer,
     CreateEmployeeSerializer,
     UserSerializer
@@ -469,17 +470,30 @@ def change_password(request):
 class StoreViewSet(viewsets.ModelViewSet):
     """
     ViewSet для управления магазинами.
-    Только владелец может управлять своими магазинами.
+    Владелец может создавать новые магазины и управлять существующими.
+
+    Endpoints:
+    - GET /api/users/stores/ - список магазинов пользователя
+    - POST /api/users/stores/ - создать новый магазин
+    - GET /api/users/stores/{id}/ - детали магазина
+    - PUT/PATCH /api/users/stores/{id}/ - обновить магазин
+    - DELETE /api/users/stores/{id}/ - удалить магазин
+    - GET /api/users/stores/staff-credentials/ - получить credentials staff аккаунта
     """
 
-    serializer_class = StoreSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        """Используем разные сериализаторы для создания и просмотра"""
+        if self.action == 'create':
+            return CreateStoreSerializer
+        return StoreSerializer
 
     def get_queryset(self):
         """Пользователь видит только свои магазины (где он owner или сотрудник)"""
         user = self.request.user
 
-        # Если запрашивает владелец - показываем его магазины
+        # Для создания/редактирования/удаления - только магазины владельца
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return Store.objects.filter(owner=user)
 
@@ -489,9 +503,45 @@ class StoreViewSet(viewsets.ModelViewSet):
             employees__is_active=True
         ).distinct()
 
-    def perform_create(self, serializer):
-        """Устанавливаем текущего пользователя как владельца"""
-        serializer.save(owner=self.request.user)
+    def create(self, request, *args, **kwargs):
+        """Создание нового магазина"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        # Создаем магазин
+        store = serializer.save()
+
+        # Возвращаем данные магазина с tenant_key и staff credentials
+        response_data = {
+            'status': 'success',
+            'message': 'Магазин успешно создан',
+            'data': {
+                'store': {
+                    'id': store.id,
+                    'name': store.name,
+                    'slug': store.slug,
+                    'tenant_key': store.tenant_key,
+                    'schema_name': store.schema_name,
+                    'address': store.address,
+                    'city': store.city,
+                    'phone': store.phone,
+                    'email': store.email,
+                    'is_active': store.is_active,
+                    'created_at': store.created_at
+                },
+                'staff_credentials': {
+                    'username': f"{store.slug}_staff",
+                    'password': '12345678',
+                    'note': 'Общий аккаунт для всех сотрудников магазина'
+                }
+            }
+        }
+
+        logger.info(
+            f"Store created: {store.name} by {request.user.username}"
+        )
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['get'], url_path='staff-credentials')
     def staff_credentials(self, request):
