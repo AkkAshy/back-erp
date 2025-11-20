@@ -158,9 +158,12 @@ class CreateEmployeeSerializer(serializers.Serializer):
     )
 
     def validate_username(self, value):
-        """Проверка уникальности username"""
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("Пользователь с таким логином уже существует")
+        """
+        Проверка username.
+        Разрешаем существующий username - логика в create() определит что делать.
+        """
+        # Не проверяем на уникальность здесь - проверим в create()
+        # Это позволяет добавлять существующих сотрудников в другие магазины
         return value
 
     def validate_role(self, value):
@@ -181,24 +184,41 @@ class CreateEmployeeSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        """Валидация: для не-кассиров требуется username/password"""
+        """
+        Валидация: для не-кассиров требуется username/password (если создаем нового).
+        Если username существует - проверим в create().
+        """
         role = attrs.get('role')
         username = attrs.get('username')
         password = attrs.get('password')
 
+        # Проверяем существует ли User
+        user_exists = username and User.objects.filter(username=username).exists()
+
         # Для всех ролей кроме кассира требуется аккаунт
-        if role != 'cashier' and (not username or not password):
-            raise serializers.ValidationError({
-                'username': 'Для этой роли требуется создание аккаунта (username и password)'
-            })
+        if role != 'cashier':
+            if not username:
+                raise serializers.ValidationError({
+                    'username': 'Для этой роли требуется username'
+                })
+
+            # Если пользователь НЕ существует, требуем password
+            if not user_exists and not password:
+                raise serializers.ValidationError({
+                    'password': 'Для нового сотрудника требуется пароль'
+                })
 
         # Для кассиров аккаунт опционален
         if role == 'cashier':
-            # Если указан username, то нужен и password
-            if username and not password:
-                raise serializers.ValidationError({
-                    'password': 'Если указан username, необходимо указать password'
-                })
+            # Если указан username
+            if username:
+                # Если User НЕ существует, требуем password
+                if not user_exists and not password:
+                    raise serializers.ValidationError({
+                        'password': 'Для нового сотрудника с username требуется пароль'
+                    })
+
+            # Если указан password без username - ошибка
             if password and not username:
                 raise serializers.ValidationError({
                     'username': 'Если указан password, необходимо указать username'
@@ -211,6 +231,10 @@ class CreateEmployeeSerializer(serializers.Serializer):
         """
         Создание Employee с опциональным User аккаунтом.
         Store берется из request.tenant (установлен middleware).
+
+        Поддерживает два режима:
+        1. Создание нового User + Employee (если username не существует)
+        2. Добавление существующего User в другой магазин (если username существует)
         """
 
         # Получаем store из контекста
@@ -224,18 +248,75 @@ class CreateEmployeeSerializer(serializers.Serializer):
 
         try:
             user = None
+            is_existing_user = False
+            created_password = None
 
-            # 1. Создаем User только если указаны username/password
-            if username and password:
-                user = User.objects.create_user(
-                    username=username,
-                    password=password,  # Хешируется автоматически
-                    first_name=validated_data['first_name'],
-                    last_name=validated_data.get('last_name', ''),
-                    email=validated_data.get('email', ''),
-                    is_active=True
-                )
-                logger.info(f"Created user for employee: {user.username}")
+            # 1. Проверяем существует ли User с таким username
+            if username:
+                try:
+                    user = User.objects.get(username=username)
+                    is_existing_user = True
+                    logger.info(f"Found existing user: {username}")
+
+                    # ПРОВЕРКА БЕЗОПАСНОСТИ: владелец может добавить только своих сотрудников
+                    # Проверяем что user уже работает в одном из магазинов владельца
+                    # Используем raw SQL для проверки по всем tenant схемам
+                    from django.db import connection
+
+                    owner_stores = Store.objects.filter(owner=request.user, is_active=True)
+                    found_in_owner_store = False
+
+                    for owner_store in owner_stores:
+                        # Переключаемся на схему магазина владельца
+                        with connection.cursor() as cursor:
+                            cursor.execute(f'SET search_path TO "{owner_store.schema_name}", public')
+
+                            # Проверяем есть ли Employee с этим user
+                            if Employee.objects.filter(user=user).exists():
+                                found_in_owner_store = True
+                                break
+
+                    # Возвращаем search_path
+                    with connection.cursor() as cursor:
+                        cursor.execute(f'SET search_path TO "{store.schema_name}", public')
+
+                    if not found_in_owner_store:
+                        raise serializers.ValidationError({
+                            'username': (
+                                f'Пользователь "{username}" не найден в ваших магазинах. '
+                                'Вы можете добавить только сотрудников, которые уже работают '
+                                'в одном из ваших магазинов.'
+                            )
+                        })
+
+                    # Проверяем что не дублируем
+                    if Employee.objects.filter(user=user, store=store).exists():
+                        raise serializers.ValidationError({
+                            'username': f'Сотрудник "{username}" уже работает в этом магазине'
+                        })
+
+                    logger.info(
+                        f"Adding existing user {username} to store {store.name} "
+                        f"by {request.user.username}"
+                    )
+
+                except User.DoesNotExist:
+                    # User не существует - создаем нового
+                    if not password:
+                        raise serializers.ValidationError({
+                            'password': 'Для нового сотрудника требуется пароль'
+                        })
+
+                    user = User.objects.create_user(
+                        username=username,
+                        password=password,  # Хешируется автоматически
+                        first_name=validated_data['first_name'],
+                        last_name=validated_data.get('last_name', ''),
+                        email=validated_data.get('email', ''),
+                        is_active=True
+                    )
+                    created_password = password
+                    logger.info(f"Created new user: {username}")
 
             # 2. Создаем Employee запись (с user или без)
             employee = Employee.objects.create(
@@ -249,16 +330,23 @@ class CreateEmployeeSerializer(serializers.Serializer):
                 is_active=True
             )
 
-            logger.info(
-                f"Created employee: {employee.full_name} ({employee.role}) "
-                f"for store: {store.name} by {request.user.username}"
-            )
+            if is_existing_user:
+                logger.info(
+                    f"Added existing employee: {employee.full_name} ({employee.role}) "
+                    f"to store: {store.name} by {request.user.username}"
+                )
+            else:
+                logger.info(
+                    f"Created new employee: {employee.full_name} ({employee.role}) "
+                    f"for store: {store.name} by {request.user.username}"
+                )
 
             # 3. Возвращаем данные
             return {
                 'employee': employee,
                 'username': username or None,
-                'password': password or None  # Plaintext для владельца (если был создан)
+                'password': created_password,  # Plaintext только для новых пользователей
+                'is_existing_user': is_existing_user
             }
 
         except Exception as e:
@@ -353,7 +441,21 @@ class CreateStoreSerializer(serializers.Serializer):
     def validate(self, data):
         """Генерация slug если не указан"""
         if not data.get('slug'):
-            base_slug = slugify(data['name'])
+            from transliterate import translit
+
+            # Транслитерация для кириллицы
+            try:
+                transliterated = translit(data['name'], 'ru', reversed=True)
+            except:
+                # Если транслитерация не сработала, используем оригинал
+                transliterated = data['name']
+
+            base_slug = slugify(transliterated)
+
+            # Если после slugify получилась пустая строка, используем default
+            if not base_slug:
+                base_slug = 'store'
+
             slug = base_slug
             counter = 1
 

@@ -10,7 +10,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Q
+from django.db.models import Q, Sum, Avg, Count
+from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
@@ -612,6 +613,287 @@ class StoreViewSet(viewsets.ModelViewSet):
                 'message': f'Общий аккаунт для магазина "{store.name}" не найден. Возможно, он был удален.'
             }, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=False, methods=['get'], url_path='my-stores-with-credentials')
+    def my_stores_with_credentials(self, request):
+        """
+        Получить список всех магазинов пользователя с их staff credentials.
+
+        НЕ требует X-Tenant-Key, только Authorization token.
+        Возвращает все магазины, где пользователь является владельцем (owner).
+
+        GET /api/users/stores/my-stores-with-credentials/
+
+        Headers:
+        - Authorization: Bearer {token}
+
+        Response:
+        {
+            "status": "success",
+            "data": {
+                "count": 2,
+                "stores": [
+                    {
+                        "id": 1,
+                        "name": "Тестовый Магазин",
+                        "slug": "test_shop",
+                        "tenant_key": "test_shop_4dfa7a5a",
+                        "address": "г. Ташкент",
+                        "city": "Ташкент",
+                        "phone": "+998901234567",
+                        "is_active": true,
+                        "created_at": "2025-11-20T10:00:00+05:00",
+                        "staff_credentials": {
+                            "username": "test_shop_staff",
+                            "password": "12345678",
+                            "full_name": "Сотрудники Тестовый Магазин",
+                            "is_active": true
+                        }
+                    },
+                    ...
+                ]
+            }
+        }
+        """
+        # Получаем все магазины пользователя
+        stores = Store.objects.filter(owner=request.user, is_active=True).order_by('-created_at')
+
+        stores_data = []
+
+        for store in stores:
+            # Формируем данные о магазине
+            store_info = {
+                'id': store.id,
+                'name': store.name,
+                'slug': store.slug,
+                'tenant_key': store.tenant_key,
+                'schema_name': store.schema_name,
+                'description': store.description,
+                'address': store.address,
+                'city': store.city,
+                'region': store.region,
+                'phone': store.phone,
+                'email': store.email,
+                'legal_name': store.legal_name,
+                'tax_id': store.tax_id,
+                'is_active': store.is_active,
+                'created_at': store.created_at,
+            }
+
+            # Пытаемся получить staff credentials для каждого магазина
+            staff_username = f"{store.slug}_staff"
+
+            try:
+                staff_user = User.objects.get(username=staff_username)
+                store_info['staff_credentials'] = {
+                    'username': staff_username,
+                    'password': '12345678',
+                    'full_name': f"{staff_user.first_name} {staff_user.last_name}",
+                    'is_active': staff_user.is_active,
+                    'note': 'Общий аккаунт для всех сотрудников магазина'
+                }
+            except User.DoesNotExist:
+                # Если staff user не найден - помечаем, что его нужно создать
+                store_info['staff_credentials'] = None
+                store_info['staff_credentials_missing'] = True
+                store_info['staff_credentials_note'] = f'Staff аккаунт не найден. Выполните: python manage.py create_staff_users --store {store.slug}'
+
+            stores_data.append(store_info)
+
+        return Response({
+            'status': 'success',
+            'data': {
+                'count': len(stores_data),
+                'stores': stores_data
+            }
+        })
+
+    @action(detail=False, methods=['get'], url_path='multi-store-analytics')
+    def multi_store_analytics(self, request):
+        """
+        Получить агрегированную аналитику по всем магазинам пользователя.
+
+        НЕ требует X-Tenant-Key, только Authorization token.
+        Собирает данные из ВСЕХ магазинов владельца.
+
+        GET /api/users/stores/multi-store-analytics/
+
+        Query params:
+        - start_date: дата начала (YYYY-MM-DD) - опционально
+        - end_date: дата окончания (YYYY-MM-DD) - опционально
+        - period: готовый период (today, yesterday, week, month) - опционально
+
+        Response:
+        {
+            "status": "success",
+            "data": {
+                "total_stores": 3,
+                "period": {
+                    "start_date": "2025-11-01",
+                    "end_date": "2025-11-20"
+                },
+                "aggregated": {
+                    "total_sales": 1500000.00,
+                    "total_sales_count": 450,
+                    "total_discount": 50000.00,
+                    "avg_sale_amount": 3333.33
+                },
+                "by_store": [
+                    {
+                        "store_id": 1,
+                        "store_name": "Магазин 1",
+                        "store_slug": "shop_1",
+                        "tenant_key": "shop_1_abc123",
+                        "total_sales": 500000.00,
+                        "sales_count": 150,
+                        "avg_sale": 3333.33
+                    },
+                    ...
+                ]
+            }
+        }
+        """
+        from django.db import connection
+        from analytics.models import DailySalesReport
+        from decimal import Decimal
+
+        # Получаем все магазины пользователя
+        stores = Store.objects.filter(owner=request.user, is_active=True)
+
+        if not stores.exists():
+            return Response({
+                'status': 'error',
+                'message': 'У вас нет активных магазинов'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Парсим параметры периода
+        start_date, end_date = self._parse_period_params(request)
+
+        # Собираем аналитику по каждому магазину
+        stores_analytics = []
+        total_sales = Decimal('0')
+        total_sales_count = 0
+        total_discount = Decimal('0')
+        total_items_sold = 0
+
+        for store in stores:
+            # Переключаемся на схему магазина
+            with connection.cursor() as cursor:
+                cursor.execute(f'SET search_path TO "{store.schema_name}", public')
+
+            try:
+                # Получаем отчеты за период из схемы магазина
+                reports = DailySalesReport.objects.filter(
+                    date__gte=start_date,
+                    date__lte=end_date
+                )
+
+                # Агрегируем данные магазина
+                store_totals = reports.aggregate(
+                    total_sales=Sum('total_sales') or Decimal('0'),
+                    sales_count=Sum('total_sales_count') or 0,
+                    total_discount=Sum('total_discount') or Decimal('0'),
+                    total_items=Sum('total_items_sold') or 0,
+                )
+
+                # Добавляем к общим итогам
+                total_sales += store_totals['total_sales'] or Decimal('0')
+                total_sales_count += store_totals['sales_count'] or 0
+                total_discount += store_totals['total_discount'] or Decimal('0')
+                total_items_sold += store_totals['total_items'] or 0
+
+                # Формируем данные по магазину
+                stores_analytics.append({
+                    'store_id': store.id,
+                    'store_name': store.name,
+                    'store_slug': store.slug,
+                    'tenant_key': store.tenant_key,
+                    'address': store.address,
+                    'city': store.city,
+                    'total_sales': float(store_totals['total_sales'] or 0),
+                    'sales_count': store_totals['sales_count'] or 0,
+                    'total_discount': float(store_totals['total_discount'] or 0),
+                    'total_items_sold': store_totals['total_items'] or 0,
+                    'avg_sale': float(
+                        (store_totals['total_sales'] or 0) / (store_totals['sales_count'] or 1)
+                    ) if store_totals['sales_count'] else 0,
+                })
+
+            except Exception as e:
+                logger.error(f"Error getting analytics for store {store.slug}: {e}")
+                # Добавляем магазин с нулевыми данными
+                stores_analytics.append({
+                    'store_id': store.id,
+                    'store_name': store.name,
+                    'store_slug': store.slug,
+                    'tenant_key': store.tenant_key,
+                    'total_sales': 0,
+                    'sales_count': 0,
+                    'error': str(e)
+                })
+
+        # Возвращаем схему обратно в public
+        with connection.cursor() as cursor:
+            cursor.execute('SET search_path TO public')
+
+        # Сортируем магазины по убыванию продаж
+        stores_analytics.sort(key=lambda x: x.get('total_sales', 0), reverse=True)
+
+        return Response({
+            'status': 'success',
+            'data': {
+                'total_stores': len(stores_analytics),
+                'period': {
+                    'start_date': start_date.isoformat(),
+                    'end_date': end_date.isoformat()
+                },
+                'aggregated': {
+                    'total_sales': float(total_sales),
+                    'total_sales_count': total_sales_count,
+                    'total_discount': float(total_discount),
+                    'total_items_sold': total_items_sold,
+                    'avg_sale_amount': float(
+                        total_sales / total_sales_count if total_sales_count else 0
+                    ),
+                },
+                'by_store': stores_analytics
+            }
+        })
+
+    def _parse_period_params(self, request):
+        """Парсит параметры периода из запроса"""
+        from datetime import datetime, timedelta
+
+        # Проверяем готовые периоды
+        period = request.query_params.get('period')
+        today = timezone.now().date()
+
+        if period == 'today':
+            return today, today
+        elif period == 'yesterday':
+            yesterday = today - timedelta(days=1)
+            return yesterday, yesterday
+        elif period == 'week':
+            week_ago = today - timedelta(days=7)
+            return week_ago, today
+        elif period == 'month':
+            month_ago = today - timedelta(days=30)
+            return month_ago, today
+
+        # Кастомный период
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        if start_date and end_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d').date()
+                end = datetime.strptime(end_date, '%Y-%m-%d').date()
+                return start, end
+            except ValueError:
+                pass
+
+        # По умолчанию - последние 30 дней
+        return today - timedelta(days=30), today
+
 
 class EmployeeViewSet(viewsets.ModelViewSet):
     """
@@ -678,21 +960,28 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         }
     )
     def create(self, request, *args, **kwargs):
-        """Создание сотрудника"""
+        """Создание сотрудника или добавление существующего в магазин"""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Создаем User + Employee
+        # Создаем User + Employee или добавляем существующего
         result = serializer.save()
 
         employee = result['employee']
         username = result['username']
         password = result['password']
+        is_existing_user = result.get('is_existing_user', False)
+
+        # Сообщение зависит от того, новый пользователь или существующий
+        if is_existing_user:
+            message = 'Сотрудник добавлен в магазин'
+        else:
+            message = 'Сотрудник успешно создан'
 
         # Возвращаем данные сотрудника + учетные данные для владельца
         response_data = {
             'status': 'success',
-            'message': 'Сотрудник успешно создан',
+            'message': message,
             'data': {
                 'employee': {
                     'id': employee.id,
@@ -708,15 +997,22 @@ class EmployeeViewSet(viewsets.ModelViewSet):
                 },
                 'credentials': {
                     'username': username,
-                    'password': password  # Plaintext для владельца
-                } if username and password else None
+                    'password': password  # Plaintext только для новых сотрудников
+                } if username and password else None,
+                'is_existing_user': is_existing_user
             }
         }
 
-        logger.info(
-            f"Employee created: {username} by {request.user.username} "
-            f"in store: {request.tenant.name}"
-        )
+        if is_existing_user:
+            logger.info(
+                f"Employee added to store: {username} by {request.user.username} "
+                f"in store: {request.tenant.name}"
+            )
+        else:
+            logger.info(
+                f"Employee created: {username} by {request.user.username} "
+                f"in store: {request.tenant.name}"
+            )
 
         return Response(response_data, status=status.HTTP_201_CREATED)
 

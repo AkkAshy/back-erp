@@ -64,28 +64,89 @@ class SchemaManager:
     @staticmethod
     def _create_schema_tables(schema_name):
         """
-        Создает таблицы в новой схеме, копируя структуру из public.
+        Создает таблицы в новой схеме напрямую из моделей.
 
         Args:
             schema_name (str): Имя схемы
         """
         try:
+            from django.apps import apps
+            from django.conf import settings
+
+            # Переключаемся на tenant схему
             with connection.cursor() as cursor:
-                # Устанавливаем search_path на новую схему
                 cursor.execute(f'SET search_path TO "{schema_name}", public')
 
-                # Запускаем миграции для создания таблиц
-                # Здесь можно использовать django migrate, но для tenant-specific таблиц
-                # Пока оставим пустым - таблицы будут создаваться при первом использовании
+            # Получаем tenant apps
+            tenant_app_labels = [app.split('.')[0] for app in settings.TENANT_APPS]
 
-                # Возвращаем search_path обратно
+            # Собираем все модели из tenant apps
+            tenant_models = []
+            for app_label in tenant_app_labels:
+                try:
+                    app_config = apps.get_app_config(app_label)
+                    models = list(app_config.get_models())
+                    tenant_models.extend(models)
+                except LookupError:
+                    logger.warning(f"App {app_label} not found")
+
+            # Добавляем Employee model из users app (tenant-specific)
+            try:
+                from users.models import Employee
+                tenant_models.append(Employee)
+                logger.debug("Added Employee model to tenant models")
+            except ImportError:
+                logger.warning("Could not import Employee model")
+
+            logger.info(f"Creating {len(tenant_models)} tables in {schema_name}")
+
+            # Создаем таблицы используя SchemaEditor
+            with connection.schema_editor() as schema_editor:
+                for model in tenant_models:
+                    try:
+                        schema_editor.create_model(model)
+                        logger.debug(f"Created table for {model._meta.label}")
+                    except Exception as e:
+                        logger.warning(f"Error creating table for {model._meta.label}: {e}")
+
+            # Создаем таблицу django_migrations
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS django_migrations (
+                        id SERIAL PRIMARY KEY,
+                        app VARCHAR(255) NOT NULL,
+                        name VARCHAR(255) NOT NULL,
+                        applied TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+                    )
+                """)
+
+                # Копируем записи о миграциях tenant apps из public
+                for app_label in tenant_app_labels:
+                    cursor.execute(f"""
+                        INSERT INTO django_migrations (app, name, applied)
+                        SELECT app, name, applied
+                        FROM public.django_migrations
+                        WHERE app = '{app_label}'
+                        ON CONFLICT DO NOTHING
+                    """)
+
+            # Возвращаем search_path обратно
+            with connection.cursor() as cursor:
                 cursor.execute('SET search_path TO public')
 
-                logger.info(f"Tables created in schema: {schema_name}")
+            logger.info(f"Successfully created tables in schema: {schema_name}")
 
         except Exception as e:
             logger.error(f"Error creating tables in schema {schema_name}: {e}")
-            raise
+            # Возвращаем search_path в любом случае
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute('SET search_path TO public')
+            except:
+                pass
+            # НЕ raise - позволяем магазину создаться даже если таблицы не создались
+            # Таблицы можно создать потом через create_tenant_tables
+            logger.warning(f"Store created but tables not initialized for {schema_name}")
 
     @staticmethod
     def drop_schema(schema_name, cascade=False):

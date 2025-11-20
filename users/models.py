@@ -159,9 +159,32 @@ class Store(models.Model):
         return f"{self.name} ({self.slug})"
 
     def save(self, *args, **kwargs):
-        """Автоматически генерируем tenant_key и schema_name"""
+        """Автоматически генерируем slug, tenant_key и schema_name"""
         import uuid
         import hashlib
+        from django.utils.text import slugify
+
+        # Генерируем slug если его нет
+        if not self.slug:
+            try:
+                from transliterate import translit
+                transliterated = translit(self.name, 'ru', reversed=True)
+            except:
+                transliterated = self.name
+
+            base_slug = slugify(transliterated)
+
+            if not base_slug:
+                base_slug = 'store'
+
+            # Делаем уникальным
+            original_slug = base_slug
+            counter = 1
+            while Store.objects.filter(slug=base_slug).exclude(pk=self.pk).exists():
+                base_slug = f"{original_slug}_{counter}"
+                counter += 1
+
+            self.slug = base_slug
 
         # Генерируем уникальный tenant_key
         if not self.tenant_key:
@@ -170,9 +193,10 @@ class Store(models.Model):
             short_hash = hashlib.md5(unique_string.encode()).hexdigest()[:8]
             self.tenant_key = f"{self.slug}_{short_hash}"
 
-        # Генерируем schema_name
+        # Генерируем schema_name (заменяем дефисы на подчеркивания для PostgreSQL)
         if not self.schema_name:
-            self.schema_name = f"tenant_{self.slug}"
+            safe_slug = self.slug.replace('-', '_')
+            self.schema_name = f"tenant_{safe_slug}"
 
         super().save(*args, **kwargs)
 
@@ -460,10 +484,25 @@ def create_owner_employee(sender, instance, created, **kwargs):
     """
     Автоматически создаём запись Employee с ролью OWNER,
     общий аккаунт STAFF для всех сотрудников,
-    и общую кассу при создании нового магазина.
+    и PostgreSQL схему при создании нового магазина.
     """
     if created:
         try:
+            # 0. Создаем PostgreSQL схему с таблицами
+            from core.schema_utils import SchemaManager
+            if SchemaManager.create_schema(instance.schema_name):
+                logger.info(f"Created schema: {instance.schema_name}")
+
+                # Создаем дефолтные данные (категории и единицы)
+                try:
+                    from django.core.management import call_command
+                    call_command('create_default_data', store=instance.slug)
+                    logger.info(f"Created default data for store: {instance.slug}")
+                except Exception as e:
+                    logger.warning(f"Failed to create default data for store {instance.slug}: {e}")
+            else:
+                logger.warning(f"Failed to create schema for store: {instance.slug}")
+
             # 1. Создаём Employee для владельца
             Employee.objects.create(
                 user=instance.owner,
@@ -502,33 +541,12 @@ def create_owner_employee(sender, instance, created, **kwargs):
             else:
                 logger.warning(f"Staff username {staff_username} already exists, skipping creation")
 
-            # 3. Создаём общую кассу в tenant схеме
-            from django.db import connection
-            from sales.models import CashRegister
+            # 3. Создание общей кассы перенесено в отдельный management command
+            # Касса создается после применения миграций к схеме магазина
+            # python manage.py create_cash_register --store {slug}
 
-            # Переключаемся на схему тенанта
-            with connection.cursor() as cursor:
-                cursor.execute(f"SET search_path TO {instance.schema_name}")
-
-            # Создаём общую кассу
-            CashRegister.objects.create(
-                name="Основная касса",
-                code=f"{instance.slug}_main",
-                location="Главный зал",
-                is_active=True
-            )
-
-            # Возвращаем схему обратно в public
-            with connection.cursor() as cursor:
-                cursor.execute("SET search_path TO public")
-
-            logger.info(f"Created default cash register for store: {instance.name}")
+            logger.info(f"Store setup completed for: {instance.name}")
 
         except Exception as e:
-            logger.error(f"Error creating owner/staff/cash register: {e}")
-            # Возвращаем схему обратно в public в случае ошибки
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("SET search_path TO public")
-            except:
-                pass
+            logger.error(f"Error creating owner/staff for store: {e}", exc_info=True)
+            raise  # Re-raise чтобы транзакция откатилась

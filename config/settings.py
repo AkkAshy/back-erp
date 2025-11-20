@@ -19,8 +19,13 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production'
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
-# Application definition
-INSTALLED_APPS = [
+# ============================================
+# MULTI-TENANT APPLICATION CONFIGURATION
+# ============================================
+
+# SHARED_APPS: Apps whose tables go in the PUBLIC schema
+# These are shared across all tenants
+SHARED_APPS = [
     # Django apps
     'django.contrib.admin',
     'django.contrib.auth',
@@ -37,15 +42,27 @@ INSTALLED_APPS = [
     'drf_yasg',
     'django_celery_beat',
 
-    # Local apps
+    # Core app (shared)
     'core.apps.CoreConfig',
+
+    # Users app (Store model is shared, but Employee is tenant-specific)
     'users.apps.UsersConfig',
+]
+
+# TENANT_APPS: Apps whose tables go in TENANT schemas
+# Each store has its own copy of these tables
+TENANT_APPS = [
+    # Tenant-specific apps
     'products.apps.ProductsConfig',
     'sales.apps.SalesConfig',
     'customers.apps.CustomersConfig',
     'analytics.apps.AnalyticsConfig',
     'tasks.apps.TasksConfig',
 ]
+
+# INSTALLED_APPS: Combination of shared and tenant apps
+# This is what Django sees for migrations and other operations
+INSTALLED_APPS = SHARED_APPS + TENANT_APPS
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -109,6 +126,9 @@ else:
             'NAME': BASE_DIR / os.getenv('DB_NAME', 'db.sqlite3'),
         }
     }
+
+# Database router for multi-tenant schema isolation
+DATABASE_ROUTERS = ['core.routers.TenantDatabaseRouter']
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

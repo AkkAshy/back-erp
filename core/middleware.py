@@ -36,6 +36,9 @@ class TenantByKeyMiddleware(MiddlewareMixin):
         '/api/users/auth/register/',
         '/api/users/auth/login/',
         '/api/users/auth/token/refresh/',
+        '/api/users/stores/',  # Список магазинов пользователя
+        '/api/users/stores/my-stores-with-credentials/',  # Список магазинов с credentials
+        '/api/users/stores/multi-store-analytics/',  # Аналитика по всем магазинам
         '/admin/',
         '/swagger/',
         '/redoc/',
@@ -119,12 +122,30 @@ class TenantByKeyMiddleware(MiddlewareMixin):
         return None
 
     def process_response(self, request, response):
-        """Возвращаем search_path обратно в public после запроса"""
+        """
+        Возвращаем search_path обратно в public после запроса.
+        Добавляем tenant_key в JSON ответы для удобства фронтенда.
+        """
         try:
             self._set_schema('public')
             logger.debug("Reset schema to public")
         except Exception as e:
             logger.error(f"Error resetting schema: {e}")
+
+        # Добавляем tenant_key в JSON ответы
+        if (hasattr(request, 'tenant') and request.tenant and
+            response.get('Content-Type', '').startswith('application/json') and
+            hasattr(response, 'data') and isinstance(response.data, dict)):
+
+            # Не добавляем tenant_key в ответы ошибок и служебные ответы
+            if response.status_code < 400 and 'tenant_key' not in response.data:
+                response.data['tenant_key'] = request.tenant.tenant_key
+                response.data['store_name'] = request.tenant.name
+                response.data['store_slug'] = request.tenant.slug
+
+                # Обновляем rendered content если response уже был rendered
+                if hasattr(response, 'rendered_content'):
+                    response.content = response.rendered_content
 
         return response
 
