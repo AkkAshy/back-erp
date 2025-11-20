@@ -264,31 +264,19 @@ class LoadEmployeeContextMiddleware(MiddlewareMixin):
         if not hasattr(request, 'tenant') or not request.tenant:
             return None
 
-        # Загружаем employee запись (из public схемы!)
+        # Загружаем employee запись (из tenant схемы!)
         try:
             from users.models import Employee
 
-            # ВАЖНО: Для PostgreSQL переключаемся в public для запроса Employee
-            # так как Employee находится в public схеме, а не в tenant схеме
-            # Для SQLite ничего не делаем (все таблицы в одной БД)
-            if 'sqlite' not in settings.DATABASES['default']['ENGINE']:
-                with connection.cursor() as cursor:
-                    cursor.execute("SET search_path TO public")
+            # ВАЖНО: Employee записи находятся в tenant схемах, а не в public!
+            # Схема уже переключена TenantByKeyMiddleware на tenant схему,
+            # поэтому просто ищем Employee в текущей схеме
 
             employee = Employee.objects.select_related('user', 'store').filter(
                 user=request.user,
                 store=request.tenant,
                 is_active=True
             ).first()
-
-            # Возвращаемся обратно в tenant схему (только для PostgreSQL)
-            if 'sqlite' not in settings.DATABASES['default']['ENGINE']:
-                if hasattr(request, 'schema_name') and request.schema_name:
-                    with connection.cursor() as cursor:
-                        if request.schema_name == 'public':
-                            cursor.execute("SET search_path TO public")
-                        else:
-                            cursor.execute(f"SET search_path TO {request.schema_name}, public")
 
             if employee:
                 request.employee = employee

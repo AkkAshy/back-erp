@@ -603,5 +603,117 @@ Body: {"username": "test_success_admin", "password": "SecurePass123!"}
 
 ---
 
+## 🔧 Финальное исправление: LoadEmployeeContextMiddleware
+
+### Проблема 5: "Вы не имеете доступа к данному магазину" при попытке использовать API
+
+После успешного логина, при попытке обратиться к API (например, `/api/products/products/`) возникала ошибка:
+
+```json
+{
+  "status": "error",
+  "code": "permission_denied",
+  "message": "Вы не имеете доступа к данному магазину."
+}
+```
+
+**Причина:** `LoadEmployeeContextMiddleware` пытался найти Employee в `public` схеме, но Employee записи находятся в tenant схемах.
+
+### Решение:
+
+Убрали переключение в `public` схему - Employee уже находится в правильной tenant схеме благодаря `TenantByKeyMiddleware`:
+
+**Файл:** [core/middleware.py](core/middleware.py#L267-L279)
+
+**Было:**
+```python
+# ВАЖНО: Для PostgreSQL переключаемся в public для запроса Employee
+if 'sqlite' not in settings.DATABASES['default']['ENGINE']:
+    with connection.cursor() as cursor:
+        cursor.execute("SET search_path TO public")
+
+employee = Employee.objects.filter(...).first()
+
+# Возвращаемся обратно в tenant схему
+if 'sqlite' not in settings.DATABASES['default']['ENGINE']:
+    with connection.cursor() as cursor:
+        cursor.execute(f"SET search_path TO {request.schema_name}, public")
+```
+
+**Стало:**
+```python
+# ВАЖНО: Employee записи находятся в tenant схемах, а не в public!
+# Схема уже переключена TenantByKeyMiddleware на tenant схему,
+# поэтому просто ищем Employee в текущей схеме
+
+employee = Employee.objects.filter(
+    user=request.user,
+    store=request.tenant,
+    is_active=True
+).first()
+```
+
+### Результат:
+
+```bash
+# 1. Логин
+POST /api/users/auth/login/
+→ {
+    "access": "eyJ...",
+    "available_stores": [{
+      "tenant_key": "ultimate-success-store-2025_8e4f773d",
+      ...
+    }]
+  }
+
+# 2. Доступ к API с токеном и tenant_key
+GET /api/products/products/
+Authorization: Bearer eyJ...
+X-Tenant-Key: ultimate-success-store-2025_8e4f773d
+
+→ {
+    "status": "success",
+    "count": 0,
+    "tenant_key": "ultimate-success-store-2025_8e4f773d",
+    "results": []
+  }
+```
+
+**✅ Полный доступ к API работает!**
+
+---
+
+## 🎉 Итоговый результат
+
+### Все 5 проблем решены:
+
+1. ✅ **CreateEmployeeSerializer** - валидация безопасности в `validate()` (вне транзакции)
+2. ✅ **UserRegistrationSerializer** - разделение на отдельные транзакции
+3. ✅ **Store.post_save Signal** - явное переключение схемы при создании Employee
+4. ✅ **CustomTokenObtainPairSerializer** - перебор всех tenant схем при логине
+5. ✅ **LoadEmployeeContextMiddleware** - поиск Employee в tenant схеме, а не в public
+
+### Полный рабочий процесс:
+
+```bash
+# 1. ✅ Регистрация
+POST /api/users/auth/register/
+→ Создается User, Store, Schema, Employee, Tokens
+
+# 2. ✅ Логин
+POST /api/users/auth/login/
+→ Возвращает токены и список магазинов с tenant_key
+
+# 3. ✅ Работа с API
+GET /api/products/products/
+Authorization: Bearer <token>
+X-Tenant-Key: <tenant_key>
+→ Доступ к изолированным данным магазина
+```
+
+**Система полностью рабочая от регистрации до работы с API!** 🎉
+
+---
+
 **Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО И ПРОТЕСТИРОВАНО
 **Дата:** 2025-11-20
