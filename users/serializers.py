@@ -839,50 +839,82 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         }
 
         # Получаем список всех магазинов пользователя с tenant_key
-        stores = Employee.objects.filter(
-            user=user,
-            is_active=True,
-            store__is_active=True
-        ).select_related('store')
+        # ВАЖНО: Employee записи находятся в tenant схемах, а не в public
+        # Поэтому мы ищем магазины через Store.owner или перебираем все схемы
 
-        if not stores.exists():
+        from django.db import connection
+        from users.models import Store, Employee
+
+        # Находим все активные магазины
+        all_stores = Store.objects.filter(is_active=True)
+
+        # Сохраняем текущий search_path
+        with connection.cursor() as cursor:
+            cursor.execute("SHOW search_path")
+            result = cursor.fetchone()
+            original_path = result[0] if result else "public"
+
+        available_stores = []
+
+        try:
+            for store in all_stores:
+                try:
+                    # Переключаемся на схему магазина
+                    with connection.cursor() as cursor:
+                        cursor.execute(f'SET search_path TO "{store.schema_name}", public')
+
+                    # Проверяем есть ли Employee для этого user в этом магазине
+                    emp = Employee.objects.filter(
+                        user=user,
+                        store=store,
+                        is_active=True
+                    ).select_related('store').first()
+
+                    if emp:
+                        store_data = {
+                            'id': emp.store.id,
+                            'name': emp.store.name,
+                            'slug': emp.store.slug,
+                            'tenant_key': emp.store.tenant_key,  # ВАЖНО: клиент будет использовать это
+                            'role': emp.role,
+                            'role_display': emp.get_role_display(),
+                            'permissions': emp.permissions
+                        }
+
+                        # Если роль STAFF, добавляем список кассиров для выбора
+                        if emp.role == Employee.Role.STAFF:
+                            cashiers = Employee.objects.filter(
+                                store=emp.store,
+                                role__in=[Employee.Role.CASHIER, Employee.Role.STOCKKEEPER],
+                                is_active=True,
+                                user__isnull=True  # Только кассиры без user аккаунта
+                            ).values('id', 'first_name', 'last_name', 'phone', 'role')
+
+                            store_data['cashiers'] = [
+                                {
+                                    'id': c['id'],
+                                    'full_name': f"{c['last_name']} {c['first_name']}".strip(),
+                                    'phone': c['phone'],
+                                    'role': c['role']
+                                }
+                                for c in cashiers
+                            ]
+
+                        available_stores.append(store_data)
+
+                except Exception as e:
+                    logger.warning(f"Error checking employee in store {store.slug}: {e}")
+                    continue
+
+        finally:
+            # ВСЕГДА возвращаем search_path обратно
+            with connection.cursor() as cursor:
+                cursor.execute(f'SET search_path TO {original_path}')
+
+        if not available_stores:
             raise serializers.ValidationError({
                 'non_field_errors': 'У вас нет доступа ни к одному активному магазину'
             })
-
-        # Формируем список магазинов с tenant_key
-        available_stores = []
-        for emp in stores:
-            store_data = {
-                'id': emp.store.id,
-                'name': emp.store.name,
-                'slug': emp.store.slug,
-                'tenant_key': emp.store.tenant_key,  # ВАЖНО: клиент будет использовать это
-                'role': emp.role,
-                'role_display': emp.get_role_display(),
-                'permissions': emp.permissions
-            }
-
-            # Если роль STAFF, добавляем список кассиров для выбора
-            if emp.role == Employee.Role.STAFF:
-                cashiers = Employee.objects.filter(
-                    store=emp.store,
-                    role__in=[Employee.Role.CASHIER, Employee.Role.STOCKKEEPER],
-                    is_active=True,
-                    user__isnull=True  # Только кассиры без user аккаунта
-                ).values('id', 'first_name', 'last_name', 'phone', 'role')
-
-                store_data['cashiers'] = [
-                    {
-                        'id': c['id'],
-                        'full_name': f"{c['last_name']} {c['first_name']}".strip(),
-                        'phone': c['phone'],
-                        'role': c['role']
-                    }
-                    for c in cashiers
-                ]
-
-            available_stores.append(store_data)
 
         data['available_stores'] = available_stores
 

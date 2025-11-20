@@ -480,5 +480,128 @@ curl -X POST http://localhost:8000/api/users/auth/register/ \
 
 ---
 
-**Статус:** ✅ ИСПРАВЛЕНО И ПРОТЕСТИРОВАНО
+## 🔧 Дополнительное исправление: Логин после регистрации
+
+### Проблема 4: "У вас нет доступа ни к одному активному магазину" при логине
+
+После успешной регистрации, при попытке залогиниться возникала ошибка:
+
+```json
+{
+  "status": "error",
+  "message": "У вас нет доступа ни к одному активному магазину"
+}
+```
+
+**Причина:** В `CustomTokenObtainPairSerializer.validate()` код искал Employee записи через `Employee.objects.filter()` в `public` схеме, но Employee записи находятся в tenant схемах.
+
+### Решение:
+
+Переписали логику поиска магазинов пользователя - теперь перебираем все активные магазины и проверяем каждую tenant схему:
+
+**Файл:** [users/serializers.py](users/serializers.py#L841-L922)
+
+```python
+# Получаем список всех магазинов пользователя с tenant_key
+# ВАЖНО: Employee записи находятся в tenant схемах, а не в public
+# Поэтому мы ищем магазины через Store.owner или перебираем все схемы
+
+from django.db import connection
+from users.models import Store, Employee
+
+# Находим все активные магазины
+all_stores = Store.objects.filter(is_active=True)
+
+# Сохраняем текущий search_path
+with connection.cursor() as cursor:
+    cursor.execute("SHOW search_path")
+    result = cursor.fetchone()
+    original_path = result[0] if result else "public"
+
+available_stores = []
+
+try:
+    for store in all_stores:
+        try:
+            # Переключаемся на схему магазина
+            with connection.cursor() as cursor:
+                cursor.execute(f'SET search_path TO "{store.schema_name}", public')
+
+            # Проверяем есть ли Employee для этого user в этом магазине
+            emp = Employee.objects.filter(
+                user=user,
+                store=store,
+                is_active=True
+            ).select_related('store').first()
+
+            if emp:
+                store_data = {
+                    'id': emp.store.id,
+                    'name': emp.store.name,
+                    'slug': emp.store.slug,
+                    'tenant_key': emp.store.tenant_key,
+                    'role': emp.role,
+                    'role_display': emp.get_role_display(),
+                    'permissions': emp.permissions
+                }
+                available_stores.append(store_data)
+
+        except Exception as e:
+            logger.warning(f"Error checking employee in store {store.slug}: {e}")
+            continue
+
+finally:
+    # ВСЕГДА возвращаем search_path обратно
+    with connection.cursor() as cursor:
+        cursor.execute(f'SET search_path TO {original_path}')
+
+if not available_stores:
+    raise serializers.ValidationError({
+        'non_field_errors': 'У вас нет доступа ни к одному активному магазину'
+    })
+```
+
+### Результат:
+
+```bash
+# Регистрация
+POST /api/users/auth/register/
+→ {"status": "success", ...}
+
+# Логин
+POST /api/users/auth/login/
+Body: {"username": "test_success_admin", "password": "SecurePass123!"}
+
+→ Response:
+{
+  "access": "eyJ...",
+  "refresh": "eyJ...",
+  "user": {
+    "id": 40,
+    "username": "test_success_admin",
+    "email": "success@example.com",
+    "full_name": "Success Test"
+  },
+  "available_stores": [
+    {
+      "id": 24,
+      "name": "Ultimate Success Store 2025",
+      "tenant_key": "ultimate-success-store-2025_8e4f773d",
+      "role": "owner",
+      "permissions": ["view_all", "create_all", ...]
+    }
+  ],
+  "default_store": {
+    "tenant_key": "ultimate-success-store-2025_8e4f773d",
+    "name": "Ultimate Success Store 2025",
+    "role": "owner"
+  }
+}
+```
+
+**✅ Логин работает! Пользователь получает список своих магазинов!**
+
+---
+
+**Статус:** ✅ ПОЛНОСТЬЮ ИСПРАВЛЕНО И ПРОТЕСТИРОВАНО
 **Дата:** 2025-11-20
