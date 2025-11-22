@@ -10,13 +10,14 @@ from django.db import models
 from django.db.models import Q, F
 
 from products.models import (
-    Unit, Category, Attribute, AttributeValue,
+    Unit, Category, Attribute, AttributeValue, CategoryAttribute,
     Product, ProductBatch, ProductAttribute, ProductImage,
     Supplier, ProductBarcode, ProductTag, StockReservation
 )
 from products.serializers import (
     UnitSerializer, CategorySerializer, AttributeSerializer,
-    AttributeValueSerializer, ProductListSerializer, ProductDetailSerializer,
+    AttributeValueSerializer, CategoryAttributeSerializer, CategoryAttributeDetailSerializer,
+    ProductListSerializer, ProductDetailSerializer,
     ProductCreateSerializer, ProductUpdateSerializer, ProductBatchSerializer,
     ProductAttributeSerializer, ProductImageSerializer,
     SupplierSerializer, ProductBarcodeSerializer, ProductTagSerializer,
@@ -117,6 +118,131 @@ class AttributeValueViewSet(viewsets.ModelViewSet):
     search_fields = ['value']
     ordering_fields = ['value', 'order', 'created_at']
     ordering = ['order', 'value']
+
+
+class CategoryAttributeViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для привязки атрибутов к категориям.
+
+    Позволяет:
+    - Просматривать какие атрибуты привязаны к категории
+    - Добавлять новые атрибуты к категории
+    - Удалять привязки атрибутов
+    - Обновлять настройки (is_required, is_variant, order)
+    """
+
+    queryset = CategoryAttribute.objects.all()
+    serializer_class = CategoryAttributeSerializer
+    permission_classes = [IsTenantUser]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['category', 'attribute', 'is_required', 'is_variant']
+    ordering_fields = ['order', 'created_at']
+    ordering = ['order', 'attribute__name']
+
+    def get_queryset(self):
+        """Оптимизация запросов"""
+        return super().get_queryset().select_related('category', 'attribute')
+
+    def get_serializer_class(self):
+        """Использовать детальный сериализатор для retrieve"""
+        if self.action == 'retrieve':
+            return CategoryAttributeDetailSerializer
+        return CategoryAttributeSerializer
+
+    @action(detail=False, methods=['get'])
+    def by_category(self, request):
+        """
+        Получить все атрибуты категории с полными данными.
+
+        Query params:
+        - category_id: ID категории (обязательный)
+
+        Пример: GET /api/products/category-attributes/by_category/?category_id=5
+        """
+        category_id = request.query_params.get('category_id')
+
+        if not category_id:
+            return Response(
+                {'error': 'Параметр category_id обязателен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Получаем все привязанные атрибуты с полными данными
+        category_attrs = self.get_queryset().filter(
+            category_id=category_id
+        ).select_related('attribute').prefetch_related('attribute__values')
+
+        serializer = CategoryAttributeDetailSerializer(category_attrs, many=True)
+        return Response({
+            'status': 'success',
+            'data': serializer.data
+        })
+
+    @action(detail=False, methods=['post'])
+    def bulk_create(self, request):
+        """
+        Массовое добавление атрибутов к категории.
+
+        Body:
+        {
+            "category": 5,
+            "attributes": [
+                {"attribute": 1, "is_required": true, "is_variant": false, "order": 0},
+                {"attribute": 2, "is_required": false, "is_variant": true, "order": 1}
+            ]
+        }
+        """
+        category_id = request.data.get('category')
+        attributes_data = request.data.get('attributes', [])
+
+        if not category_id:
+            return Response(
+                {'error': 'Поле category обязательно'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not attributes_data:
+            return Response(
+                {'error': 'Поле attributes обязательно и не должно быть пустым'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Создаём привязки
+        created_items = []
+        errors = []
+
+        for attr_data in attributes_data:
+            attr_data['category'] = category_id
+            serializer = self.get_serializer(data=attr_data)
+
+            if serializer.is_valid():
+                serializer.save()
+                created_items.append(serializer.data)
+            else:
+                errors.append({
+                    'attribute': attr_data.get('attribute'),
+                    'errors': serializer.errors
+                })
+
+        if errors:
+            return Response(
+                {
+                    'status': 'partial_success',
+                    'message': 'Некоторые атрибуты не были добавлены',
+                    'created': created_items,
+                    'errors': errors
+                },
+                status=status.HTTP_207_MULTI_STATUS
+            )
+
+        return Response(
+            {
+                'status': 'success',
+                'message': f'Добавлено атрибутов: {len(created_items)}',
+                'data': created_items
+            },
+            status=status.HTTP_201_CREATED
+        )
 
 
 class ProductImageViewSet(viewsets.ModelViewSet):

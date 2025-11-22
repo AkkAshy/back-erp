@@ -4,7 +4,7 @@ Serializers для products app.
 
 from rest_framework import serializers
 from products.models import (
-    Unit, Category, Attribute, AttributeValue,
+    Unit, Category, Attribute, AttributeValue, CategoryAttribute,
     Product, ProductPricing, ProductInventory, ProductBatch,
     ProductAttribute, ProductImage, Supplier, ProductBarcode,
     ProductTag, StockReservation
@@ -32,18 +32,35 @@ class CategorySerializer(serializers.ModelSerializer):
     parent_name = serializers.CharField(source='parent.name', read_only=True)
     children_count = serializers.SerializerMethodField()
     products_count = serializers.SerializerMethodField()
+    attributes = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
         fields = [
             'id', 'name', 'slug', 'description', 'parent', 'parent_name',
             'image', 'order', 'is_active', 'created_at', 'updated_at',
-            'children_count', 'products_count'
+            'children_count', 'products_count', 'attributes'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {
             'slug': {'required': False}  # Делаем slug опциональным, будем генерировать автоматически
         }
+
+    def get_attributes(self, obj):
+        """Возвращает список привязанных атрибутов с их настройками"""
+        # Используем prefetch_related для оптимизации
+        category_attributes = obj.category_attributes.select_related('attribute').order_by('order', 'attribute__name')
+
+        return [{
+            'id': ca.id,
+            'attribute_id': ca.attribute.id,
+            'attribute_name': ca.attribute.name,
+            'attribute_slug': ca.attribute.slug,
+            'attribute_type': ca.attribute.type,
+            'is_required': ca.is_required,
+            'is_variant': ca.is_variant,
+            'order': ca.order
+        } for ca in category_attributes]
 
     def create(self, validated_data):
         """Автоматически генерируем slug из name если не передан"""
@@ -150,6 +167,63 @@ class AttributeSerializer(serializers.ModelSerializer):
 
             validated_data['slug'] = slug
         return super().update(instance, validated_data)
+
+
+class CategoryAttributeSerializer(serializers.ModelSerializer):
+    """
+    Сериализатор для привязки атрибутов к категориям.
+
+    Используется для:
+    - Просмотра привязанных атрибутов категории
+    - Создания/удаления привязок
+    """
+
+    attribute_name = serializers.CharField(source='attribute.name', read_only=True)
+    attribute_slug = serializers.CharField(source='attribute.slug', read_only=True)
+    attribute_type = serializers.CharField(source='attribute.type', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True)
+
+    class Meta:
+        model = CategoryAttribute
+        fields = [
+            'id', 'category', 'category_name',
+            'attribute', 'attribute_name', 'attribute_slug', 'attribute_type',
+            'is_required', 'is_variant', 'order', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def validate(self, data):
+        """Проверка что атрибут не привязан дважды к одной категории"""
+        category = data.get('category')
+        attribute = data.get('attribute')
+
+        # Проверяем только при создании (не при обновлении)
+        if not self.instance:
+            if CategoryAttribute.objects.filter(category=category, attribute=attribute).exists():
+                raise serializers.ValidationError({
+                    'attribute': 'Этот атрибут уже привязан к данной категории'
+                })
+
+        return data
+
+
+class CategoryAttributeDetailSerializer(serializers.ModelSerializer):
+    """
+    Детальный сериализатор для CategoryAttribute с полными данными атрибута.
+
+    Включает все значения атрибута (AttributeValue).
+    """
+
+    attribute = AttributeSerializer(read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True)
+
+    class Meta:
+        model = CategoryAttribute
+        fields = [
+            'id', 'category', 'category_name',
+            'attribute', 'is_required', 'is_variant', 'order', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
 
 
 class ProductImageSerializer(serializers.ModelSerializer):

@@ -289,6 +289,67 @@ class AttributeValue(models.Model):
         return f"{self.attribute.name}: {self.value}"
 
 
+class CategoryAttribute(models.Model):
+    """
+    Привязка атрибутов к категориям.
+
+    Определяет какие атрибуты доступны для товаров в данной категории.
+    Например:
+    - Категория "Одежда" → атрибуты: Размер, Цвет, Материал
+    - Категория "Электроника" → атрибуты: Бренд, Гарантия, Мощность
+    """
+
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name='category_attributes',
+        verbose_name=_('Категория')
+    )
+
+    attribute = models.ForeignKey(
+        Attribute,
+        on_delete=models.CASCADE,
+        related_name='category_attributes',
+        verbose_name=_('Атрибут')
+    )
+
+    is_required = models.BooleanField(
+        default=False,
+        verbose_name=_('Обязательный'),
+        help_text=_('Обязателен ли этот атрибут для товаров данной категории')
+    )
+
+    is_variant = models.BooleanField(
+        default=False,
+        verbose_name=_('Используется для вариантов'),
+        help_text=_('Создавать варианты товара на основе этого атрибута (например, разные цвета)')
+    )
+
+    order = models.IntegerField(
+        default=0,
+        verbose_name=_('Порядок отображения')
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_('Дата создания')
+    )
+
+    class Meta:
+        db_table = 'products_category_attribute'
+        verbose_name = _('Атрибут категории')
+        verbose_name_plural = _('Атрибуты категорий')
+        ordering = ['category', 'order', 'attribute__name']
+        unique_together = [['category', 'attribute']]
+        indexes = [
+            models.Index(fields=['category']),
+            models.Index(fields=['attribute']),
+        ]
+
+    def __str__(self):
+        return f"{self.category.name} → {self.attribute.name}"
+
+
 class Product(models.Model):
     """
     Товар - основная модель продукта (нормализованная версия).
