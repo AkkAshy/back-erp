@@ -74,13 +74,13 @@ if total_requested > available_qty:
 
 ### 3. Уменьшение количества товара при завершении резервирования
 
-**Файл:** [products/models.py](products/models.py#L1310-L1336)
+**Файл:** [products/models.py](products/models.py#L1310-L1328)
 
 ```python
 def complete(self):
     """
     Завершает резервирование (товар продан).
-    ВАЖНО: Уменьшает количество товара в партии или общий запас!
+    ВАЖНО: Уменьшает количество товара в партии!
     """
     if self.status == 'active':
         # Уменьшаем количество товара
@@ -90,15 +90,8 @@ def complete(self):
             if self.batch.quantity < 0:
                 self.batch.quantity = 0
             self.batch.save(update_fields=['quantity', 'updated_at'])
-        else:
-            # Списываем из общего запаса товара (если нет партии)
-            if hasattr(self.product, 'pricing') and self.product.pricing:
-                current_stock = self.product.pricing.stock_quantity or 0
-                new_stock = current_stock - self.quantity
-                if new_stock < 0:
-                    new_stock = 0
-                self.product.pricing.stock_quantity = new_stock
-                self.product.pricing.save(update_fields=['stock_quantity', 'updated_at'])
+        # Если партия не указана, товар уже должен быть списан из партий
+        # Ничего дополнительно делать не нужно, так как количество хранится в партиях
 
         # Меняем статус резервирования
         self.status = 'completed'
@@ -107,9 +100,38 @@ def complete(self):
 
 **Что делает:**
 - При завершении резервирования уменьшает количество в партии
-- Если партия не указана - уменьшает общий запас товара в `Pricing.stock_quantity`
 - Защита от отрицательных значений (минимум 0)
 - Обновляет `updated_at` для отслеживания изменений
+
+### 4. Автоматический вызов завершения резервирования
+
+**Файл:** [sales/models.py](sales/models.py#L558-L578)
+
+```python
+def create_stock_reservation(self):
+    """Создать резервирование товара"""
+    from products.models import StockReservation
+
+    if not self.reservation:
+        reservation = StockReservation.objects.create(
+            product=self.product,
+            batch=self.batch,
+            quantity=self.quantity,
+            order_reference=self.sale.receipt_number,
+            status='active',
+            created_by=None
+        )
+        self.reservation = reservation
+        self.save()
+
+        # Сразу завершаем резервирование, чтобы списать товар со склада
+        reservation.complete()
+```
+
+**Что делает:**
+- Создает резервирование при завершении продажи
+- **СРАЗУ ЖЕ** вызывает `reservation.complete()` для списания товара
+- Это гарантирует что количество уменьшится автоматически
 
 ---
 
@@ -282,6 +304,9 @@ POST /api/sales/sales/scan_item/
 
 2. **products/models.py**
    - `StockReservation.complete()` - добавлено уменьшение количества товара
+
+3. **sales/models.py**
+   - `SaleItem.create_stock_reservation()` - добавлен автоматический вызов `reservation.complete()` для списания товара
 
 ---
 

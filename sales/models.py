@@ -574,6 +574,9 @@ class SaleItem(models.Model):
             self.reservation = reservation
             self.save()
 
+            # Сразу завершаем резервирование, чтобы списать товар со склада
+            reservation.complete()
+
 
 class Payment(models.Model):
     """
