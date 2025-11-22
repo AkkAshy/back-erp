@@ -476,9 +476,12 @@ class SaleViewSet(viewsets.ModelViewSet):
                 is_active=True
             ).order_by('expiry_date', 'received_at').first()
 
-        # Получаем кассира из request.employee (заполняется middleware)
-        cashier = getattr(request, 'employee', None)
-        cashier_id = cashier.id if cashier else None
+        # Получаем кассира из request.data (для общего аккаунта) или request.employee
+        cashier_id = request.data.get('cashier')
+        if not cashier_id:
+            # Фоллбэк на request.employee если не указан явно
+            cashier = getattr(request, 'employee', None)
+            cashier_id = cashier.id if cashier else None
 
         # Ищем текущую незавершённую продажу этой смены
         sale = Sale.objects.filter(
@@ -725,6 +728,8 @@ class SaleViewSet(viewsets.ModelViewSet):
 
         Body:
         - payments: массив платежей [{"payment_method": "cash", "amount": 150000, "received_amount": 200000}]
+        - cashier_id: ID кассира (опционально, если не был указан в scan_item)
+        - customer_id: ID клиента (опционально)
         """
         from decimal import Decimal
 
@@ -742,6 +747,18 @@ class SaleViewSet(viewsets.ModelViewSet):
                 {'error': 'Нельзя завершить продажу без товаров'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        # Обновляем cashier_id если передан и ещё не заполнен
+        cashier_id = request.data.get('cashier_id') or request.data.get('cashier')
+        if cashier_id and not sale.cashier_id:
+            sale.cashier_id = cashier_id
+            sale.save(update_fields=['cashier_id'])
+
+        # Обновляем customer_id если передан
+        customer_id = request.data.get('customer_id') or request.data.get('customer')
+        if customer_id and not sale.customer_id:
+            sale.customer_id = customer_id
+            sale.save(update_fields=['customer_id'])
 
         payments_data = request.data.get('payments', [])
 
