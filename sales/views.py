@@ -467,6 +467,14 @@ class SaleViewSet(viewsets.ModelViewSet):
                     {'error': 'Партия не найдена'},
                     status=status.HTTP_404_NOT_FOUND
                 )
+        else:
+            # Автоматический выбор партии (FEFO - First Expired, First Out)
+            # Выбираем партию с самым ранним сроком годности и достаточным количеством
+            batch = ProductBatch.objects.filter(
+                product=product,
+                quantity__gte=quantity,
+                is_active=True
+            ).order_by('expiry_date', 'received_at').first()
 
         # Ищем текущую незавершённую продажу этой смены
         sale = Sale.objects.filter(
