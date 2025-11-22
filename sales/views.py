@@ -486,17 +486,35 @@ class SaleViewSet(viewsets.ModelViewSet):
                 status='pending'
             )
 
-        # Получаем цену товара из pricing
-        unit_price = Decimal('0.00')
-        if hasattr(product, 'pricing') and product.pricing:
-            unit_price = product.pricing.sale_price or product.pricing.cost_price or Decimal('0.00')
+        # ПРОВЕРКА НАЛИЧИЯ ТОВАРА
+        available_qty = product.available_quantity
 
-        # Проверяем, есть ли уже такой товар в продаже
+        # Проверяем, сколько уже добавлено в текущую продажу
         existing_item = SaleItem.objects.filter(
             sale=sale,
             product=product,
             batch=batch
         ).first()
+
+        current_qty_in_sale = existing_item.quantity if existing_item else Decimal('0')
+        total_requested = current_qty_in_sale + quantity
+
+        if total_requested > available_qty:
+            return Response({
+                'status': 'error',
+                'code': 'insufficient_stock',
+                'message': f'Недостаточно товара на складе. Доступно: {available_qty}, запрошено: {total_requested}',
+                'data': {
+                    'available': str(available_qty),
+                    'requested': str(total_requested),
+                    'current_in_sale': str(current_qty_in_sale)
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Получаем цену товара из pricing
+        unit_price = Decimal('0.00')
+        if hasattr(product, 'pricing') and product.pricing:
+            unit_price = product.pricing.sale_price or product.pricing.cost_price or Decimal('0.00')
 
         if existing_item:
             # Увеличиваем количество существующей позиции
@@ -571,6 +589,29 @@ class SaleViewSet(viewsets.ModelViewSet):
                     {'error': 'Партия не найдена'},
                     status=status.HTTP_404_NOT_FOUND
                 )
+
+        # ПРОВЕРКА НАЛИЧИЯ ТОВАРА
+        available_qty = product.available_quantity
+
+        # Проверяем, сколько уже добавлено в эту продажу
+        current_qty_in_sale = SaleItem.objects.filter(
+            sale=sale,
+            product=product
+        ).aggregate(total=models.Sum('quantity'))['total'] or Decimal('0')
+
+        total_requested = current_qty_in_sale + quantity
+
+        if total_requested > available_qty:
+            return Response({
+                'status': 'error',
+                'code': 'insufficient_stock',
+                'message': f'Недостаточно товара на складе. Доступно: {available_qty}, запрошено: {total_requested}',
+                'data': {
+                    'available': str(available_qty),
+                    'requested': str(total_requested),
+                    'current_in_sale': str(current_qty_in_sale)
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Получаем цену товара из pricing
         unit_price = Decimal('0.00')

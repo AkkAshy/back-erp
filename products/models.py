@@ -1308,7 +1308,29 @@ class StockReservation(models.Model):
             self.save()
 
     def complete(self):
-        """Завершает резервирование (товар продан)"""
+        """
+        Завершает резервирование (товар продан).
+        ВАЖНО: Уменьшает количество товара в партии или общий запас!
+        """
         if self.status == 'active':
+            # Уменьшаем количество товара
+            if self.batch:
+                # Списываем из конкретной партии
+                self.batch.quantity -= self.quantity
+                if self.batch.quantity < 0:
+                    self.batch.quantity = 0
+                self.batch.save(update_fields=['quantity', 'updated_at'])
+            else:
+                # Списываем из общего запаса товара (если нет партии)
+                # Для этого используем Pricing модель
+                if hasattr(self.product, 'pricing') and self.product.pricing:
+                    current_stock = self.product.pricing.stock_quantity or 0
+                    new_stock = current_stock - self.quantity
+                    if new_stock < 0:
+                        new_stock = 0
+                    self.product.pricing.stock_quantity = new_stock
+                    self.product.pricing.save(update_fields=['stock_quantity', 'updated_at'])
+
+            # Меняем статус резервирования
             self.status = 'completed'
             self.save()
