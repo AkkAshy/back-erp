@@ -31,9 +31,9 @@ class Command(BaseCommand):
     """
 
     def handle(self, *args, **options):
-        stores = Store.objects.filter(is_active=True).order_by('name')
+        stores = Store.objects.all().order_by('name')
 
-        self.stdout.write(f"Найдено активных магазинов: {stores.count()}")
+        self.stdout.write(f"Найдено магазинов: {stores.count()}")
         self.stdout.write("="*60)
 
         success_count = 0
