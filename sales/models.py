@@ -283,7 +283,8 @@ class Sale(models.Model):
         blank=True,
         related_name='sales',
         verbose_name=_('Кассир'),
-        help_text=_('Кассир, который совершил продажу')
+        help_text=_('Кассир, который совершил продажу'),
+        db_constraint=False  # Отключаем FK constraint для multi-tenant
     )
 
     receipt_number = models.CharField(

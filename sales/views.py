@@ -476,6 +476,10 @@ class SaleViewSet(viewsets.ModelViewSet):
                 is_active=True
             ).order_by('expiry_date', 'received_at').first()
 
+        # Получаем кассира из request.employee (заполняется middleware)
+        cashier = getattr(request, 'employee', None)
+        cashier_id = cashier.id if cashier else None
+
         # Ищем текущую незавершённую продажу этой смены
         sale = Sale.objects.filter(
             session=session,
@@ -491,8 +495,14 @@ class SaleViewSet(viewsets.ModelViewSet):
             sale = Sale.objects.create(
                 session=session,
                 receipt_number=receipt_number,
-                status='pending'
+                status='pending',
+                cashier_id=cashier_id  # Заполняем ID кассира для статистики
             )
+        else:
+            # Если продажа существует, но cashier не заполнен - заполняем
+            if not sale.cashier_id and cashier_id:
+                sale.cashier_id = cashier_id
+                sale.save(update_fields=['cashier_id'])
 
         # ПРОВЕРКА НАЛИЧИЯ ТОВАРА
         # Получаем доступное количество из inventory
