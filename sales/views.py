@@ -487,7 +487,17 @@ class SaleViewSet(viewsets.ModelViewSet):
             )
 
         # ПРОВЕРКА НАЛИЧИЯ ТОВАРА
-        available_qty = product.available_quantity
+        # Получаем доступное количество из inventory
+        available_qty = Decimal('0')
+        if hasattr(product, 'inventory') and product.inventory:
+            if product.inventory.track_inventory:
+                available_qty = Decimal(str(product.inventory.quantity or 0))
+            else:
+                # Если учет не ведется - считаем что товар всегда доступен
+                available_qty = Decimal('999999')  # Очень большое число
+        else:
+            # Если нет inventory - считаем что товара нет
+            available_qty = Decimal('0')
 
         # Проверяем, сколько уже добавлено в текущую продажу
         existing_item = SaleItem.objects.filter(
@@ -591,7 +601,17 @@ class SaleViewSet(viewsets.ModelViewSet):
                 )
 
         # ПРОВЕРКА НАЛИЧИЯ ТОВАРА
-        available_qty = product.available_quantity
+        # Получаем доступное количество из inventory
+        available_qty = Decimal('0')
+        if hasattr(product, 'inventory') and product.inventory:
+            if product.inventory.track_inventory:
+                available_qty = Decimal(str(product.inventory.quantity or 0))
+            else:
+                # Если учет не ведется - считаем что товар всегда доступен
+                available_qty = Decimal('999999')  # Очень большое число
+        else:
+            # Если нет inventory - считаем что товара нет
+            available_qty = Decimal('0')
 
         # Проверяем, сколько уже добавлено в эту продажу
         current_qty_in_sale = SaleItem.objects.filter(

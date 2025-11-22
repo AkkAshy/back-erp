@@ -1320,16 +1320,8 @@ class StockReservation(models.Model):
                 if self.batch.quantity < 0:
                     self.batch.quantity = 0
                 self.batch.save(update_fields=['quantity', 'updated_at'])
-            else:
-                # Списываем из общего запаса товара (если нет партии)
-                # Для этого используем Pricing модель
-                if hasattr(self.product, 'pricing') and self.product.pricing:
-                    current_stock = self.product.pricing.stock_quantity or 0
-                    new_stock = current_stock - self.quantity
-                    if new_stock < 0:
-                        new_stock = 0
-                    self.product.pricing.stock_quantity = new_stock
-                    self.product.pricing.save(update_fields=['stock_quantity', 'updated_at'])
+            # Если партия не указана, товар уже должен быть списан из партий
+            # Ничего дополнительно делать не нужно, так как количество хранится в партиях
 
             # Меняем статус резервирования
             self.status = 'completed'
